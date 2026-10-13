@@ -22,11 +22,30 @@ def assign_voices(
     """
     beam = [State()]
     for n in sorted(notes, key=lambda n: (n.start, -n.pitch, n.id)):
+        if n.drum:
+            drum_part = next(
+                (p for p in parts if p.percussion and p.extended[0] <= n.pitch <= p.extended[1]),
+                None,
+            )
+            for state in beam:
+                state.choices = state.choices + [
+                    Assignment(
+                        note=n,
+                        part=drum_part.id if drum_part else None,
+                        confidence=0.7 if drum_part else 0,
+                        reason="provisional model percussion flag and GM drum mapping"
+                        if drum_part
+                        else "percussion retained in raw MIDI; no configured mapping for this pitch",
+                    )
+                ]
+            continue
         expanded = []
         for state in beam:
             candidates = []
             if not n.drum:
                 for p in parts:
+                    if p.percussion:
+                        continue
                     if not p.extended[0] <= n.pitch <= p.extended[1]:
                         continue
                     active = [

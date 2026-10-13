@@ -1,23 +1,37 @@
 import hashlib
 import json
 import logging
+import shutil
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
 
+import pretty_midi
+import soundfile as sf
 import typer
+from music21.exceptions21 import Music21Exception
 
 from .audio import preprocess
 from .backend import CHECKPOINT_NAME, YourMT3Backend
 from .diagnostics import piano_roll, report
-from .models import Assignment, TranscriptionResult, load_parts, read_midi, write_midi
+from .models import (
+    Assignment,
+    EnsembleConfig,
+    EnsemblePreset,
+    PartConfig,
+    TranscriptionResult,
+    load_ensemble,
+    load_parts,
+    read_midi,
+    write_midi,
+)
 from .notation import build_score, export_score, musescore_export
 from .orchestration import assign_voices
-from .rhythm import analyze
+from .rhythm import Rhythm, analyze
 
 app = typer.Typer(
-    no_args_is_help=True, help="Local YourMT3+ to provisional British brass band score"
+    no_args_is_help=True, help="Local YourMT3+ to provisional brass/wind ensemble score"
 )
 CACHE = Path(".cache/models")
 SHA256 = "ae38e415c79efd5592dcb9b658cdb99ddb11d4c4e1eaa364cab04a052473fc25"
@@ -86,6 +100,7 @@ def transcribe(
     device: str = "auto",
     cache: Path = CACHE,
     config: Path | None = None,
+    ensemble: EnsemblePreset | None = typer.Option(None, help="Built-in instrumentation preset"),
     from_midi: Path | None = typer.Option(
         None, help="Reuse real or fixture MIDI; bypasses audio inference explicitly"
     ),
@@ -99,6 +114,8 @@ def transcribe(
         raise typer.BadParameter(
             "Source separation is not implemented; brass stems are not reliably isolated"
         )
+    if config is not None and ensemble is not None:
+        raise typer.BadParameter("Choose --ensemble or --config, not both")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     if (output / "diagnostics/transcription_report.json").exists():
         raise typer.BadParameter("Output already contains a run; choose a fresh --output directory")
@@ -108,6 +125,9 @@ def transcribe(
         audio = output / "intermediate/normalized.wav"
         length = preprocess(input, audio, start, duration, normalize)
         rhythm = analyze(audio, tempo, time_signature, quantize, start, pickup)
+        selected_ensemble = load_ensemble(config, ensemble or EnsemblePreset.BRITISH)
+        parts = selected_ensemble.parts
+        save_run_settings(output, rhythm, length, start, parts, selected_ensemble)
         if from_midi:
             result = TranscriptionResult(
                 notes=read_midi(from_midi), model="MIDI import (no audio inference)", device="none"
@@ -119,46 +139,193 @@ def transcribe(
             result = backend.transcribe(audio)
         write_midi(result.notes, output / "intermediate/raw_transcription.mid", rhythm.tempo)
         (output / "intermediate/model_notes.json").write_text(result.model_dump_json(indent=2))
-        parts = load_parts(config)
-        warnings = []
+        warnings = list(selected_ensemble.assumptions)
         assignments = [] if midi_only else assign_voices(result.notes, parts)
         (output / "intermediate/assigned_voices.json").write_text(
             json.dumps([a.model_dump() for a in assignments], indent=2)
         )
-        if midi_only:
-            warnings.append("Orchestration and notation skipped by --midi-only.")
-            write_midi(result.notes, output / "full_score.mid", rhythm.tempo)
-        else:
-            score, mapping = build_score(assignments, parts, rhythm, start + length)
-            export_score(score, output)
-            adjustments = [m for m in mapping if m.get("quantization_adjustment")]
-            extra_voices = [
-                m
-                for m in mapping
-                if m["notation_voice"]
-                > next(p.max_simultaneous for p in parts if p.id == m["part"])
-            ]
-            if adjustments:
-                warnings.append(
-                    f"Quantization shortened {len(adjustments)} notes to avoid overlaps; see provenance."
-                )
-            if extra_voices:
-                warnings.append(
-                    f"Quantization collapsed attacks into {len(extra_voices)} extra notation voices; see provenance."
-                )
-            (output / "intermediate/score_note_provenance.json").write_text(
-                json.dumps(mapping, indent=2)
-            )
-            if mscz:
-                warning = musescore_export(output)
-                if warning:
-                    warnings.append(warning)
-        piano_roll(result.notes, output / "diagnostics/piano_roll.png")
-        report(result, assignments, parts, rhythm, length, start, output, warnings)
-        typer.echo(
-            f"Generated {len(result.notes)} notes using {result.model} on {result.device}: {output.resolve()}"
+        finish_run(
+            result, assignments, parts, rhythm, length, start, output, midi_only, mscz, warnings
         )
-    except (ValueError, RuntimeError, FileNotFoundError) as exc:
+    except (ValueError, RuntimeError, FileNotFoundError, Music21Exception) as exc:
+        raise typer.BadParameter(
+            f"{exc}. Saved transcription can be recovered with brass-transcribe resume {output}"
+        ) from exc
+
+
+def save_run_settings(
+    output: Path,
+    rhythm: Rhythm,
+    duration: float,
+    start: float,
+    parts: list[PartConfig],
+    ensemble: EnsembleConfig | None = None,
+) -> None:
+    settings = dict(
+        rhythm=rhythm.model_dump(),
+        audio_duration=duration,
+        excerpt_start=start,
+        parts=[p.model_dump() for p in parts],
+        ensemble=ensemble.model_dump(exclude={"parts"}) if ensemble else None,
+    )
+    (output / "intermediate/run_settings.json").write_text(json.dumps(settings, indent=2))
+
+
+def finish_run(
+    result: TranscriptionResult,
+    assignments: list[Assignment],
+    parts: list[PartConfig],
+    rhythm: Rhythm,
+    length: float,
+    start: float,
+    output: Path,
+    midi_only: bool,
+    mscz: bool,
+    warnings: list[str],
+) -> None:
+    if midi_only:
+        warnings.append("Orchestration and notation skipped by --midi-only.")
+        write_midi(result.notes, output / "full_score.mid", rhythm.tempo)
+    else:
+        unknown = {a.part for a in assignments if a.part} - {p.id for p in parts}
+        if unknown:
+            raise ValueError(f"Saved assignments reference unknown parts: {sorted(unknown)}")
+        score, mapping = build_score(assignments, parts, rhythm, start + length)
+        settings_path = output / "intermediate/run_settings.json"
+        if settings_path.exists():
+            selected = json.loads(settings_path.read_text()).get("ensemble")
+            if selected:
+                score.metadata.title = f"Provisional {selected['name']} transcription"
+        # Preserve provenance even if notation export fails.
+        (output / "intermediate/score_note_provenance.json").write_text(
+            json.dumps(mapping, indent=2)
+        )
+        export_score(score, output)
+        adjustments = [m for m in mapping if m.get("quantization_adjustment")]
+        extra_voices = [
+            m
+            for m in mapping
+            if m["notation_voice"] > next(p.max_simultaneous for p in parts if p.id == m["part"])
+        ]
+        if adjustments:
+            warnings.append(
+                f"Quantization shortened {len(adjustments)} notes to avoid overlaps; see provenance."
+            )
+        if extra_voices:
+            warnings.append(
+                f"Quantization collapsed attacks into {len(extra_voices)} extra notation voices; see provenance."
+            )
+        if mscz:
+            warning = musescore_export(output)
+            if warning:
+                warnings.append(warning)
+    piano_roll(result.notes, output / "diagnostics/piano_roll.png")
+    report(result, assignments, parts, rhythm, length, start, output, warnings)
+    typer.echo(
+        f"Generated {len(result.notes)} notes using {result.model} on {result.device}: {output.resolve()}"
+    )
+
+
+@app.command()
+def resume(
+    output: Path,
+    config: Path | None = typer.Option(None, help="Override saved instrumentation metadata"),
+    ensemble: EnsemblePreset | None = typer.Option(
+        None, help="Reassign cached notes to this preset"
+    ),
+    destination: Path | None = typer.Option(
+        None, "--output", help="Export to a separate directory"
+    ),
+    tempo: float | None = typer.Option(None, min=20, max=400),
+    time_signature: str | None = None,
+    quantize: str | None = None,
+    pickup: float | None = typer.Option(None, min=0),
+    start: float | None = typer.Option(
+        None, min=0, help="Excerpt start for legacy runs without saved settings"
+    ),
+    mscz: bool = typer.Option(True, "--mscz/--no-mscz"),
+):
+    """Re-export a saved transcription without running or loading the model."""
+    if config is not None and ensemble is not None:
+        raise typer.BadParameter("Choose --ensemble or --config, not both")
+    try:
+        intermediate = output / "intermediate"
+        result = TranscriptionResult.model_validate_json(
+            (intermediate / "model_notes.json").read_text()
+        )
+        audio = intermediate / "normalized.wav"
+        settings_path = intermediate / "run_settings.json"
+        warnings = ["Score regenerated from cached model notes; inference was not repeated."]
+        selected_ensemble = None
+        if settings_path.exists():
+            settings = json.loads(settings_path.read_text())
+            original_rhythm = Rhythm.model_validate(settings["rhythm"])
+            length = settings["audio_duration"]
+            original_start = settings["excerpt_start"]
+            parts = [PartConfig.model_validate(p) for p in settings["parts"]]
+            if settings.get("ensemble"):
+                selected_ensemble = EnsembleConfig.model_validate(
+                    {**settings["ensemble"], "parts": parts}
+                )
+        else:
+            length = sf.info(audio).duration
+            original_start = 0
+            original_tempo = float(
+                pretty_midi.PrettyMIDI(
+                    str(intermediate / "raw_transcription.mid")
+                ).get_tempo_changes()[1][0]
+            )
+            original_rhythm = analyze(audio, original_tempo, None, "1/16", 0)
+            parts = load_parts()
+            warnings.append(
+                "Legacy run settings unavailable: assumed excerpt start 0, meter 4/4 and grid 1/16 unless overridden; tempo recovered from raw MIDI."
+            )
+        previous_part_ids = {p.id for p in parts}
+        if config is not None or ensemble is not None:
+            selected_ensemble = load_ensemble(config, ensemble or EnsemblePreset.BRITISH)
+            parts = selected_ensemble.parts
+        if selected_ensemble:
+            warnings.extend(selected_ensemble.assumptions)
+        excerpt_start = original_start if start is None else start
+        if any(value is not None for value in (tempo, time_signature, quantize, pickup, start)):
+            rhythm = analyze(
+                audio,
+                original_rhythm.tempo if tempo is None else tempo,
+                time_signature or original_rhythm.time_signature,
+                quantize or original_rhythm.grid,
+                excerpt_start,
+                original_rhythm.pickup if pickup is None else pickup,
+            )
+        else:
+            rhythm = original_rhythm
+        assigned_path = intermediate / "assigned_voices.json"
+        assignments = (
+            [Assignment.model_validate(a) for a in json.loads(assigned_path.read_text())]
+            if assigned_path.exists()
+            else []
+        )
+        reassign = ensemble is not None or previous_part_ids != {p.id for p in parts}
+        assignment_changed = reassign or (not assignments and bool(result.notes))
+        if assignment_changed:
+            assignments = assign_voices(result.notes, parts)
+            warnings.append(
+                "Cached source notes reassigned to the selected ensemble; source pitches and timings unchanged."
+            )
+        if destination is not None and destination.resolve() != output.resolve():
+            if destination.exists() and any(destination.iterdir()):
+                raise ValueError("Destination is not empty; choose a new --output directory")
+            # Preserve source audio, untouched model chunks and note provenance.
+            shutil.copytree(intermediate, destination / "intermediate", dirs_exist_ok=True)
+            output = destination
+            assigned_path = output / "intermediate/assigned_voices.json"
+        if assignment_changed or not assigned_path.exists():
+            assigned_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
+        save_run_settings(output, rhythm, length, excerpt_start, parts, selected_ensemble)
+        (output / "diagnostics").mkdir(exist_ok=True)
+        finish_run(
+            result, assignments, parts, rhythm, length, excerpt_start, output, False, mscz, warnings
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, Music21Exception) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
 
@@ -221,7 +388,7 @@ def diagnose(output: Path):
 
 def main():
     # Preserve requested bare-file interface while retaining diagnostic subcommands.
-    commands = {"transcribe", "diagnose", "doctor", "download-model"}
+    commands = {"transcribe", "diagnose", "doctor", "download-model", "resume"}
     if len(sys.argv) > 1 and sys.argv[1] not in commands and not sys.argv[1].startswith("-"):
         sys.argv.insert(1, "transcribe")
     app()

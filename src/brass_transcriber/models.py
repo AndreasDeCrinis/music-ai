@@ -1,3 +1,4 @@
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
@@ -27,6 +28,7 @@ class NoteEvent(BaseModel):
 class PartConfig(BaseModel):
     id: str
     name: str
+    instrument_name: str | None = None
     family: str
     typical: tuple[int, int]
     extended: tuple[int, int]
@@ -36,6 +38,26 @@ class PartConfig(BaseModel):
     max_simultaneous: int = Field(default=2, ge=1)
     program: int
     instrument_sound: str
+    percussion: bool = False
+
+
+class EnsemblePreset(str, Enum):
+    BRITISH = "british-brass-band"
+    BRASSARANKA = "brassaranka"
+
+
+class EnsembleConfig(BaseModel):
+    id: str = "custom"
+    name: str = "Custom ensemble"
+    sources: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    parts: list[PartConfig] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_parts(self):
+        if len({p.id for p in self.parts}) != len(self.parts):
+            raise ValueError("Part IDs must be unique")
+        return self
 
 
 class Assignment(BaseModel):
@@ -57,12 +79,22 @@ class TranscriptionBackend(Protocol):
     def transcribe(self, audio_path: Path) -> TranscriptionResult: ...
 
 
-def load_parts(path: Path | None = None) -> list[PartConfig]:
-    path = path or Path(__file__).parent / "configs/british_brass_band.yaml"
-    parts = [PartConfig.model_validate(p) for p in yaml.safe_load(path.read_text())["parts"]]
-    if len({p.id for p in parts}) != len(parts):
-        raise ValueError("Part IDs must be unique")
-    return parts
+def load_ensemble(
+    path: Path | None = None, preset: EnsemblePreset = EnsemblePreset.BRITISH
+) -> EnsembleConfig:
+    preset = EnsemblePreset(preset)
+    filenames = {
+        EnsemblePreset.BRITISH: "british_brass_band.yaml",
+        EnsemblePreset.BRASSARANKA: "brassaranka.yaml",
+    }
+    path = path or Path(__file__).parent / "configs" / filenames[preset]
+    return EnsembleConfig.model_validate(yaml.safe_load(path.read_text()))
+
+
+def load_parts(
+    path: Path | None = None, preset: EnsemblePreset = EnsemblePreset.BRITISH
+) -> list[PartConfig]:
+    return load_ensemble(path, preset).parts
 
 
 def read_midi(path: Path, offset: float = 0, prefix: str = "n") -> list[NoteEvent]:

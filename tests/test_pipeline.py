@@ -4,7 +4,7 @@ import pytest
 from music21 import converter, interval
 
 from brass_transcriber.backend import deduplicate
-from brass_transcriber.models import Assignment, NoteEvent, load_parts, read_midi
+from brass_transcriber.models import Assignment, EnsemblePreset, NoteEvent, load_parts, read_midi
 from brass_transcriber.notation import build_score, export_score
 from brass_transcriber.orchestration import assign_voices
 from brass_transcriber.rhythm import Rhythm, quantize
@@ -14,7 +14,11 @@ def event(id="n", pitch=60, start=0, end=1, **kwargs):
     return NoteEvent(id=id, pitch=pitch, start=start, end=end, **kwargs)
 
 
-@pytest.mark.parametrize("part", load_parts(), ids=lambda p: p.id)
+@pytest.mark.parametrize(
+    "part",
+    load_parts() + [p for p in load_parts(preset=EnsemblePreset.BRASSARANKA) if not p.percussion],
+    ids=lambda p: p.id,
+)
 def test_transposition_roundtrip(part, tmp_path):
     source = event(pitch=part.preferred_pitch)
     assignment = Assignment(note=source, part=part.id, confidence=0.5, reason="test")
@@ -202,6 +206,23 @@ def test_musescore_multivoice_playback(tmp_path):
     score, _ = build_score(assignments, parts, Rhythm(tempo=120, detected_tempo=None, beats=[]), 5)
     export_score(score, tmp_path)
     assert musescore_export(tmp_path) is None
+    # Inspect MuseScore's actual selected templates, not only MusicXML hints.
+    import xml.etree.ElementTree as ET
+    from zipfile import ZipFile
+
+    with ZipFile(tmp_path / "full_score.mscz") as archive:
+        native = ET.fromstring(
+            archive.read(next(n for n in archive.namelist() if n.endswith(".mscx")))
+        )
+    native_parts = native.findall("./Score/Part")
+    assert len(native_parts) == 17
+    for native_part, config in zip(native_parts, parts, strict=True):
+        assert native_part.findtext("Instrument/instrumentId").startswith("brass.")
+        if config.family == "bass":
+            assert "tuba" in native_part.findtext("Instrument/instrumentId")
+            assert native_part.findtext("Instrument/transposeChromatic") == str(
+                -21 if config.id == "eb_bass" else -26
+            )
     subprocess.run(
         [
             str(binary),
@@ -219,4 +240,87 @@ def test_musescore_multivoice_playback(tmp_path):
     expected = read_midi(tmp_path / "full_score.mid")
     assert Counter((n.pitch, round(n.start, 2)) for n in playback) == Counter(
         (n.pitch, round(n.start, 2)) for n in expected
+    )
+
+
+@pytest.mark.parametrize("grid,pickup", [("1/16", 0), ("1/12", 0), ("1/16", 1)])
+def test_off_grid_audio_endpoint_exports_complete_bars(tmp_path, grid, pickup):
+    parts = load_parts()
+    r = Rhythm(tempo=133.92857142857142, detected_tempo=None, beats=[], grid=grid, pickup=pickup)
+    assignment = Assignment(
+        note=event(pitch=72, start=250.13, end=258.79),
+        part="solo_cornet",
+        confidence=0.5,
+        reason="test",
+    )
+    score, mapping = build_score([assignment], parts, r, 258.795125)
+    assert all(p.getElementsByClass("Measure")[-1].highestTime == 4 for p in score.parts)
+    export_score(score, tmp_path)
+    parsed = converter.parse(tmp_path / "full_score.musicxml").toSoundingPitch()
+    assert all(n.pitch.midi == 72 for n in parsed.recurse().notes)
+    midi = read_midi(tmp_path / "full_score.mid")
+    assert len(midi) == 1
+    onset, end = quantize(assignment.note.start, assignment.note.end, r)
+    assert midi[0].start == pytest.approx(onset * 60 / r.tempo, abs=0.005)
+    assert midi[0].end == pytest.approx(end * 60 / r.tempo, abs=0.005)
+
+
+def test_resume_uses_saved_notes_and_settings_without_inference(tmp_path, monkeypatch):
+    import json
+
+    import numpy as np
+    import soundfile as sf
+    from typer.testing import CliRunner
+
+    from brass_transcriber.backend import YourMT3Backend
+    from brass_transcriber.cli import app, save_run_settings
+    from brass_transcriber.models import TranscriptionResult, write_midi
+
+    def unexpected_inference(*args, **kwargs):
+        pytest.fail("Resume must not run or load inference")
+
+    monkeypatch.setattr(YourMT3Backend, "transcribe", unexpected_inference)
+    intermediate = tmp_path / "intermediate"
+    intermediate.mkdir()
+    r = Rhythm(tempo=123, detected_tempo=None, beats=[], time_signature="3/4", grid="1/8")
+    n = event(pitch=72, start=5, end=5.6)
+    result = TranscriptionResult(notes=[n], model="cached model", device="cpu", runtime=9)
+    (intermediate / "model_notes.json").write_text(result.model_dump_json())
+    assigned = Assignment(note=n, part="solo_cornet", confidence=0.5, reason="cached")
+    (intermediate / "assigned_voices.json").write_text(json.dumps([assigned.model_dump()]))
+    write_midi([n], intermediate / "raw_transcription.mid", r.tempo)
+    sf.write(intermediate / "normalized.wav", np.zeros(12345), 16000)
+    save_run_settings(tmp_path, r, 12345 / 16000, 5, load_parts())
+    before = (intermediate / "model_notes.json").read_bytes()
+    response = CliRunner().invoke(app, ["resume", str(tmp_path), "--no-mscz"])
+    assert response.exit_code == 0, response.output
+    assert (intermediate / "model_notes.json").read_bytes() == before
+    report = json.loads((tmp_path / "diagnostics/transcription_report.json").read_text())
+    assert report["selected_model"] == "cached model"
+    assert report["inference_runtime"] == 9
+    assert report["excerpt_start"] == 5
+    assert report["rhythm"]["time_signature"] == "3/4"
+    assert report["rhythm"]["grid"] == "1/8"
+    assert (tmp_path / "full_score.musicxml").exists()
+
+
+def test_bass_staff_labels_have_unambiguous_instrument_names(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    parts = [p for p in load_parts() if p.family == "bass"]
+    score, _ = build_score([], parts, Rhythm(tempo=120, detected_tempo=None, beats=[]), 2)
+    export_score(score, tmp_path)
+    root = ET.parse(tmp_path / "full_score.musicxml")
+    for xml_part, part in zip(root.findall(".//score-part"), parts, strict=True):
+        assert xml_part.findtext("part-name") == part.name
+        assert "Tuba" in xml_part.findtext("score-instrument/instrument-name")
+        assert xml_part.findtext("score-instrument/instrument-sound") == "brass.tuba"
+    # Cached settings and custom configurations predating instrument_name are safe too.
+    for part in parts:
+        part.instrument_name = None
+    score, _ = build_score([], parts, Rhythm(tempo=120, detected_tempo=None, beats=[]), 2)
+    export_score(score, tmp_path)
+    assert all(
+        p.findtext("score-instrument/instrument-name") == "Tuba"
+        for p in ET.parse(tmp_path / "full_score.musicxml").findall(".//score-part")
     )

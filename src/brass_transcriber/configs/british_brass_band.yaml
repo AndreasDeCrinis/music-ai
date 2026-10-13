@@ -1,3 +1,5 @@
+id: british-brass-band
+name: British brass band
 parts:
 - id: soprano_cornet
   name: E♭ Soprano Cornet
@@ -13,7 +15,8 @@ parts:
   preferred_pitch: 78
   max_simultaneous: 2
   program: 56
-  instrument_sound: brass.cornet
+  instrument_sound: brass.cornet.soprano
+  instrument_name: E♭ Cornet
 - id: solo_cornet
   name: Solo B♭ Cornet
   family: cornet
@@ -29,6 +32,7 @@ parts:
   max_simultaneous: 2
   program: 56
   instrument_sound: brass.cornet
+  instrument_name: B♭ Cornet
 - id: repiano_cornet
   name: Repiano B♭ Cornet
   family: cornet
@@ -44,6 +48,7 @@ parts:
   max_simultaneous: 2
   program: 56
   instrument_sound: brass.cornet
+  instrument_name: B♭ Cornet
 - id: second_cornet
   name: Second B♭ Cornet
   family: cornet
@@ -59,6 +64,7 @@ parts:
   max_simultaneous: 2
   program: 56
   instrument_sound: brass.cornet
+  instrument_name: B♭ Cornet
 - id: third_cornet
   name: Third B♭ Cornet
   family: cornet
@@ -74,6 +80,7 @@ parts:
   max_simultaneous: 2
   program: 56
   instrument_sound: brass.cornet
+  instrument_name: B♭ Cornet
 - id: flugelhorn
   name: B♭ Flugelhorn
   family: flugelhorn
@@ -89,6 +96,7 @@ parts:
   max_simultaneous: 2
   program: 56
   instrument_sound: brass.flugelhorn
+  instrument_name: B♭ Flugelhorn
 - id: solo_horn
   name: Solo E♭ Tenor Horn
   family: horn
@@ -104,6 +112,7 @@ parts:
   max_simultaneous: 2
   program: 60
   instrument_sound: brass.alto-horn
+  instrument_name: E♭ Alto Horn
 - id: first_horn
   name: First E♭ Tenor Horn
   family: horn
@@ -119,6 +128,7 @@ parts:
   max_simultaneous: 2
   program: 60
   instrument_sound: brass.alto-horn
+  instrument_name: E♭ Alto Horn
 - id: second_horn
   name: Second E♭ Tenor Horn
   family: horn
@@ -134,6 +144,7 @@ parts:
   max_simultaneous: 2
   program: 60
   instrument_sound: brass.alto-horn
+  instrument_name: E♭ Alto Horn
 - id: first_baritone
   name: First B♭ Baritone
   family: baritone
@@ -149,6 +160,7 @@ parts:
   max_simultaneous: 2
   program: 61
   instrument_sound: brass.baritone-horn
+  instrument_name: B♭ Baritone Horn (Treble Clef)
 - id: second_baritone
   name: Second B♭ Baritone
   family: baritone
@@ -164,6 +176,7 @@ parts:
   max_simultaneous: 2
   program: 61
   instrument_sound: brass.baritone-horn
+  instrument_name: B♭ Baritone Horn (Treble Clef)
 - id: first_trombone
   name: First B♭ Trombone
   family: trombone
@@ -179,6 +192,7 @@ parts:
   max_simultaneous: 2
   program: 57
   instrument_sound: brass.trombone
+  instrument_name: B♭ Trombone (Treble Clef)
 - id: second_trombone
   name: Second B♭ Trombone
   family: trombone
@@ -194,6 +208,7 @@ parts:
   max_simultaneous: 2
   program: 57
   instrument_sound: brass.trombone
+  instrument_name: B♭ Trombone (Treble Clef)
 - id: bass_trombone
   name: Bass Trombone
   family: trombone
@@ -209,6 +224,7 @@ parts:
   max_simultaneous: 2
   program: 57
   instrument_sound: brass.trombone.bass
+  instrument_name: Bass Trombone
 - id: euphonium
   name: B♭ Euphonium
   family: euphonium
@@ -224,6 +240,7 @@ parts:
   max_simultaneous: 2
   program: 58
   instrument_sound: brass.euphonium
+  instrument_name: B♭ Euphonium (Treble Clef)
 - id: eb_bass
   name: E♭ Bass
   family: bass
@@ -239,6 +256,7 @@ parts:
   max_simultaneous: 2
   program: 58
   instrument_sound: brass.tuba
+  instrument_name: E♭ Bass Tuba (treble clef)
 - id: bb_bass
   name: B♭ Bass
   family: bass
@@ -254,3 +272,4 @@ parts:
   max_simultaneous: 2
   program: 58
   instrument_sound: brass.tuba
+  instrument_name: B♭ Contrabass Tuba (treble clef)

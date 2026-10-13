@@ -1,6 +1,6 @@
 # Local brass band transcriber
 
-A working local CLI using the pretrained **YourMT3+ YPTF.MoE+Multi (noPS)** model through MT3-Infer. It converts MP3/WAV/FLAC into unquantized MIDI and a provisional, editable 17-part British brass band conductor score. No paid services or audio uploads are used.
+A working local CLI using the pretrained **YourMT3+ YPTF.MoE+Multi (noPS)** model through MT3-Infer. It converts MP3/WAV/FLAC into unquantized MIDI and provisional, editable conductor scores. Presets include a 17-part British brass band and the 15-part Brassaranka wind ensemble. No paid services or audio uploads are used.
 
 The model cannot reliably distinguish cornet desks or reconstruct the original brass orchestration. Part assignments are deterministic suggestions for editing, with source provenance and explicit uncertainty. Empty parts contain rests; the application never adds pitches to fill staves.
 
@@ -28,6 +28,66 @@ uv run brass-transcribe input.mp3 --output ./output-excerpt \
 uv run brass-transcribe diagnose ./output
 ```
 
+## Brassaranka preset
+
+```sh
+uv run brass-transcribe "Sunchyme - Brassaranka.mp3" --ensemble brassaranka --output ./sunchyme-brassaranka
+# Reuse the existing model output and reassign notes without repeating inference:
+uv run brass-transcribe resume ./sunchyme --ensemble brassaranka --output ./sunchyme-brassaranka
+```
+
+The preset has E♭ and B♭ clarinets, two B♭ trumpets, four B♭ flugelhorns,
+B♭ tenor horn and baritone, three trombones, one tuba, and drum set.
+The six trumpet/flugelhorn players listed in the [linked Wikipedia roster](https://de.wikipedia.org/wiki/Brassaranka)
+are represented as two trumpets and four flugelhorns according to the band's
+[official 2026 technical rider, stage plot on page 5](https://www.brassaranka.at/_files/ugd/00e78a_67909573d10047669d756e0395d977d1.pdf).
+Doubling and the exact instrumentation of this particular recording remain uncertain;
+this is a sourced default preset, not a claim to recover the original arrangement.
+Singing is not inferred or added automatically.
+
+Notation defaults to Austrian conventions: clarinets/trumpets/flugelhorns use
+transposing treble clef; B♭ tenor horn and baritone sound a major ninth below
+their treble-clef parts; trombones and tuba use concert-pitch bass clef.
+The Austrian tenor horn is not the British E♭ alto/tenor horn. The baritone uses
+MuseScore's euphonium template as a playback approximation. Change clefs or
+transpositions in `src/brass_transcriber/configs/brassaranka.yaml` if your players
+use alternative parts. Instrument ranges and register priorities are heuristics.
+Each pitched part is monophonic; uncertain excess detections remain unassigned.
+
+Detected General MIDI percussion pitches 35–81 are routed to the drum set,
+rendered on percussion clef with simultaneous hits as chords and explicit
+per-drum MusicXML/MIDI mappings. Notated hits last one rhythmic grid step;
+original model durations remain in the raw transcription. Unsupported drum
+numbers remain unassigned and visible in diagnostics. This is provisional kit
+notation, not verified drum-performance reconstruction.
+
+British instrumentation remains the default (`--ensemble british-brass-band`).
+Use either `--ensemble` or a custom `--config PATH`. An explicit ensemble on
+`resume` reassigns notes; metadata-only changes with identical part IDs preserve
+assignments. `resume --output NEW_DIR` copies intermediates and leaves the source
+run unchanged. Ensemble names, sources, assumptions and instrument settings are
+saved in the run metadata and diagnostic report. No new model is downloaded.
+
+If notation export fails after inference, recover the saved run without loading
+the model or transcribing the audio again:
+
+```sh
+uv run brass-transcribe resume ./output
+# Optional notation overrides:
+uv run brass-transcribe resume ./output --tempo 120 --time-signature 4/4 --quantize 1/16
+# Apply updated instrument metadata while retaining cached notes/assignments:
+uv run brass-transcribe resume ./output --config src/brass_transcriber/configs/british_brass_band.yaml
+```
+
+New runs save tempo, meter, quantization, excerpt offset and instrumentation in
+`intermediate/run_settings.json` before inference. Recovery preserves model
+notes, their IDs and existing assignments. Legacy runs without that file recover
+tempo from raw MIDI and assume start 0, 4/4 and 1/16, with a diagnostic warning;
+use the overrides to restore any different original settings. Resume regenerates
+exports in the same output directory. Scores pad the recording's arbitrary
+sample-length endpoint with rests to a complete final measure, preventing
+unnotatable trailing durations without changing detected notes.
+
 Use a new output directory for each successful run. `--no-mscz` skips MuseScore conversion. Conversion explicitly uses the MuseScore Basic sound profile; the installed MuseSounds/Cantai integration caused intermittent CLI crashes with the default profile. This changes the exported score profile, not system settings. `--normalize` enables FFmpeg loudness normalization. `--chunk-seconds 30 --overlap 2` bounds model inference memory; overlapping chunks retain raw MIDI independently. `--device cpu` is explicit; `auto` selects CPU on this Mac. MPS is deliberately rejected by this verified adapter.
 
 `--pickup 1` specifies a one-quarter-note anacrusis (short first bar). `--quantize 1/12` or `1/24` uses triplet grids; dotted values and ties are emitted by music21. There is no automatic pickup detection. Beat tracking estimates global tempo and beat positions; meter defaults provisionally to 4/4 because downbeat/meter inference is not implemented. Manual tempo/meter are recommended for brass recordings with rubato.
@@ -42,10 +102,10 @@ This is an explicit debug/reorchestration path, not model inference. No syntheti
 
 ## Outputs
 
-- `full_score.musicxml`: all 17 named instrumental parts, transposing written pitches and MusicXML transposition metadata.
+- `full_score.musicxml`: the selected ensemble's named instrumental parts, written pitches and MusicXML transposition metadata.
 - `full_score.mid`: concert-pitch, quantized score MIDI (unquantized model MIDI in `--midi-only` mode).
 - `full_score.mscz`: native score when MuseScore CLI conversion succeeds.
-- `parts/<instrument>.musicxml`: all 17 individual parts.
+- `parts/<instrument>.musicxml`: all individual parts for the selected ensemble.
 - `intermediate/normalized.wav`: mono 16 kHz excerpt, loudness processing only with `--normalize`.
 - `intermediate/model_chunks/chunk_*.mid`: untouched per-chunk model MIDI.
 - `intermediate/raw_transcription.mid`: stitched, unquantized notes in original recording time.
@@ -55,11 +115,11 @@ This is an explicit debug/reorchestration path, not model inference. No syntheti
 - `diagnostics/transcription_report.json`: tempo/beats, meter assumption, runtime/device, original track ranges, part counts, unassigned notes, collisions and low-confidence assignments.
 - `diagnostics/piano_roll.png`: original sounding pitches and timing.
 
-Percussion is retained in raw MIDI and diagnostics as unassigned, but is not yet notated. Velocities are preserved from the model; the model may output fixed velocity. No inferred articulations or expressive dynamics are added.
+Percussion is retained in raw MIDI and diagnostics. It is notated when the configuration includes a percussion part, as in Brassaranka; it remains unassigned for the default British pitched-only configuration. Velocities are preserved from the model; the model may output fixed velocity. No inferred articulations or expressive dynamics are added.
 
 ## British notation
 
-The packaged declarative configuration is `src/brass_transcriber/configs/british_brass_band.yaml`; supply an override with `--config PATH`. It includes practical/extended concert ranges, register priorities, polyphony limits and instrument metadata. Ranges are editable heuristics, not hard physical limits for all players.
+The packaged declarative configuration is `src/brass_transcriber/configs/british_brass_band.yaml`; supply an override with `--config PATH`. It includes practical/extended concert ranges, register priorities, polyphony limits and instrument metadata. `name` is the displayed staff/desk label; `instrument_name` is a canonical instrument name for MusicXML/MuseScore template recognition. The E♭/B♭ Bass staves explicitly identify tubas, preventing MuseScore from selecting a vocal bass or men's choir sound. Native export tests inspect the actual MuseScore instrument IDs for all 17 parts. Ranges are editable heuristics, not hard physical limits for all players.
 
 Written-to-sounding intervals are: soprano cornet +3 semitones; B♭ cornets/flugelhorn −2; E♭ tenor horns −9; B♭ baritone/euphonium/tenor trombones −14; E♭ bass −21; B♭ bass −26; bass trombone 0. Only bass trombone uses bass clef. The score is built explicitly in written pitch; MusicXML metadata carries the inverse relation, avoiding double transposition. Automated tests verify every instrument through MusicXML and MIDI round trips.
 

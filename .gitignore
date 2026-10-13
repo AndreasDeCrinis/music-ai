@@ -9,3 +9,7 @@ __pycache__/
 *.egg-info/
 dist/
 .DS_Store
+sunchyme
+sunchyme-brassaranka/
+Sunchyme - Brassaranka.mp3
+sunchyme-brassaranka

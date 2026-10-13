@@ -66,6 +66,12 @@ def report(
         + [f"{p.name}: no supported notes assigned" for p in parts if not counts[p.id]],
         assignment_status="All part assignments are provisional; confidence is heuristic.",
     )
+    settings_path = output / "intermediate/run_settings.json"
+    if settings_path.exists():
+        settings = json.loads(settings_path.read_text())
+        data["ensemble"] = settings.get("ensemble")
+    data["percussion_notes"] = sum(n.drum for n in result.notes)
+    data["assigned_percussion_notes"] = sum(a.note.drum and a.part is not None for a in assignments)
     (output / "diagnostics/transcription_report.json").write_text(json.dumps(data, indent=2))
     return data
 

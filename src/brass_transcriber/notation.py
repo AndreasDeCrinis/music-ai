@@ -1,13 +1,27 @@
 import copy
+import math
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from music21 import clef, converter, instrument, interval, metadata, meter, note, stream, tempo
+import pretty_midi
+from music21 import (
+    chord,
+    clef,
+    converter,
+    instrument,
+    interval,
+    metadata,
+    meter,
+    note,
+    percussion,
+    stream,
+    tempo,
+)
 
 from .models import Assignment, NoteEvent, PartConfig, write_midi
-from .rhythm import Rhythm, quantize
+from .rhythm import Rhythm, grid_quarters, quantize
 
 
 def build_score(
@@ -17,23 +31,44 @@ def build_score(
     score.metadata = metadata.Metadata(title="Provisional brass band transcription")
     score.atSoundingPitch = False
     mapping = []
-    total_quarters = max(total_seconds * rhythm.tempo / 60, 1)
-    bar_length = meter.TimeSignature(rhythm.time_signature).barDuration.quarterLength
+    bar_length = float(meter.TimeSignature(rhythm.time_signature).barDuration.quarterLength)
     padding = float(bar_length - rhythm.pickup) if rhythm.pickup else 0
-    total_quarters += padding
+    # Audio ends at an arbitrary sample, not a notatable rhythmic duration.
+    # Pad with rests to a common complete bar, including any note whose
+    # quantized offset extends beyond the audio. Never alter detected notes
+    # simply to align the recording's endpoint with the notation grid.
+    latest_note = max(
+        (quantize(a.note.start, a.note.end, rhythm)[1] for a in assignments if a.part),
+        default=0,
+    )
+    required_quarters = max(total_seconds * rhythm.tempo / 60, latest_note, 1) + padding
+    total_quarters = math.ceil(required_quarters / bar_length) * bar_length
     for config in parts:
         part = stream.Part(id=config.id)
         part.partName = config.name
         inst = instrument.Instrument()
-        inst.instrumentName = config.name
+        # A desk label (especially "Bass") is ambiguous to MuseScore's template
+        # matching. Keep it as the staff name, but identify the actual instrument
+        # separately so tubas cannot be imported as vocal basses.
+        inst.instrumentName = config.instrument_name or (
+            "Tuba" if config.family == "bass" else config.name
+        )
         inst.partName = config.name
         inst.midiProgram = config.program
         programs = sorted({p.program for p in parts})
-        inst.midiChannel = programs.index(config.program)
+        inst.midiChannel = 9 if config.percussion else programs.index(config.program)
         inst.editorial["instrument_sound"] = config.instrument_sound
+        inst.editorial["percussion"] = config.percussion
         inst.transposition = interval.Interval(config.written_to_sounding)
         part.insert(0, inst)
-        part.insert(0, clef.BassClef() if config.clef == "bass" else clef.TrebleClef())
+        part.insert(
+            0,
+            clef.PercussionClef()
+            if config.percussion
+            else clef.BassClef()
+            if config.clef == "bass"
+            else clef.TrebleClef(),
+        )
         part.insert(0, meter.TimeSignature(rhythm.time_signature))
         part.insert(0, tempo.MetronomeMark(number=rhythm.tempo))
         ends = [0.0] * config.max_simultaneous
@@ -42,7 +77,49 @@ def build_score(
             (a for a in assignments if a.part == config.id),
             key=lambda a: (a.note.start, a.note.pitch),
         )
+        if config.percussion:
+            voices = [stream.Voice(id=1)]
+            drum_instruments = {}
+            attacks = {}
+            step = grid_quarters(rhythm.grid)
+            for a in selected:
+                onset, _ = quantize(a.note.start, a.note.end, rhythm)
+                gm_pitch = a.note.pitch
+                if gm_pitch not in drum_instruments:
+                    drum = instrument.UnpitchedPercussion()
+                    drum.instrumentName = pretty_midi.note_number_to_drum_name(gm_pitch)
+                    drum.percMapPitch = gm_pitch
+                    drum.midiChannel = 9
+                    drum_instruments[gm_pitch] = drum
+                position, head = drum_display(gm_pitch)
+                hit = note.Unpitched(position)
+                hit.storedInstrument = drum_instruments[gm_pitch]
+                hit.notehead = head
+                hit.id = a.note.id
+                hit.volume.velocity = a.note.velocity
+                attacks.setdefault(onset + padding, []).append(hit)
+                mapping.append(
+                    dict(
+                        source_id=a.note.id,
+                        source_ids=a.note.provenance or [a.note.id],
+                        part=config.id,
+                        notation_voice=1,
+                        percussion=True,
+                        sounding_pitch=gm_pitch,
+                        written_pitch=None,
+                        onset_quarters=onset,
+                        duration_quarters=step,
+                        confidence=a.confidence,
+                        percussion_duration_policy="one grid step; raw model offsets preserved in intermediate files",
+                    )
+                )
+            for onset, hits in sorted(attacks.items()):
+                event = percussion.PercussionChord(hits) if len(hits) > 1 else hits[0]
+                event.duration.quarterLength = step
+                voices[0].insert(onset, event)
         for a in selected:
+            if config.percussion:
+                break
             onset, offset = quantize(a.note.start, a.note.end, rhythm)
             onset += padding
             offset += padding
@@ -124,6 +201,27 @@ def build_score(
     return score, mapping
 
 
+def drum_display(gm_pitch: int) -> tuple[str, str]:
+    """Conventional five-line kit positions; unidentified GM percussion is shown above."""
+    if gm_pitch in {35, 36}:
+        return "F4", "normal"
+    if gm_pitch in {37, 38, 39, 40}:
+        return "C5", "normal"
+    if gm_pitch in {42, 44, 46}:
+        return "G5", "x"
+    if gm_pitch in {49, 52, 55, 57}:
+        return "A5", "x"
+    if gm_pitch in {51, 53, 59}:
+        return "F5", "x"
+    if gm_pitch in {41, 43}:
+        return "G4", "normal"
+    if gm_pitch in {45, 47}:
+        return "D5", "normal"
+    if gm_pitch in {48, 50}:
+        return "E5", "normal"
+    return "E5", "normal"
+
+
 def export_score(score: stream.Score, output: Path) -> None:
     full = output / "full_score.musicxml"
     score.write("musicxml", fp=full)
@@ -184,8 +282,14 @@ def enrich_xml(path: Path, score: stream.Score) -> None:
             ET.SubElement(xml_inst, "instrument-sound").text = inst.editorial.get(
                 "instrument_sound", "brass"
             )
-        midi = xml_part.find("midi-instrument")
-        if midi is not None:
+        if inst.editorial.get("percussion", False):
+            enrich_percussion(xml_part, root.find(f"part[@id='{xml_part.get('id')}']"), part)
+        for midi in xml_part.findall("midi-instrument"):
+            if inst.editorial.get("percussion", False):
+                channel = midi.find("midi-channel")
+                if channel is not None:
+                    channel.text = "10"
+                continue
             program = inst.midiProgram or 0
             if program not in channels:
                 channels[program] = len(channels) + 1
@@ -199,6 +303,44 @@ def enrich_xml(path: Path, score: stream.Score) -> None:
             xml_note.set("id", f"{source_id}-segment-{seen[source_id]}")
     ET.indent(root)
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def enrich_percussion(xml_part: ET.Element, xml_music: ET.Element, part: stream.Part) -> None:
+    """music21 omits per-hit storedInstrument references in percussion chords.
+    Explicitly declare and reference each GM drum without guessing from staff position.
+    """
+    hits = []
+    for event in part.recurse().notes:
+        hits.extend(event.notes if isinstance(event, chord.ChordBase) else [event])
+    xml_hits = [n for n in xml_music.findall(".//note") if n.find("unpitched") is not None]
+    if len(hits) != len(xml_hits):
+        raise RuntimeError("Percussion export changed hit count; cannot safely map GM drums")
+    instruments = {}
+    for hit in hits:
+        gm_pitch = hit.storedInstrument.percMapPitch
+        instruments[gm_pitch] = f"{xml_part.get('id')}-drum-{gm_pitch}"
+    # Keep every score-instrument before every midi-instrument (MusicXML schema order).
+    insertion = next(
+        (i for i, el in enumerate(xml_part) if el.tag == "midi-instrument"), len(xml_part)
+    )
+    for gm_pitch, identifier in sorted(instruments.items()):
+        score_inst = ET.Element("score-instrument", id=identifier)
+        ET.SubElement(score_inst, "instrument-name").text = pretty_midi.note_number_to_drum_name(
+            gm_pitch
+        )
+        xml_part.insert(insertion, score_inst)
+        insertion += 1
+        midi_inst = ET.SubElement(xml_part, "midi-instrument", id=identifier)
+        ET.SubElement(midi_inst, "midi-channel").text = "10"
+        ET.SubElement(midi_inst, "midi-unpitched").text = str(gm_pitch + 1)
+    for hit, xml_hit in zip(hits, xml_hits, strict=True):
+        for old in list(xml_hit.findall("instrument")):
+            xml_hit.remove(old)
+        reference = ET.Element("instrument", id=instruments[hit.storedInstrument.percMapPitch])
+        duration_index = list(xml_hit).index(xml_hit.find("duration"))
+        xml_hit.insert(duration_index + 1, reference)
+        xml_hit.set("id", str(hit.id))
+        xml_hit.set("dynamics", str(round((hit.volume.velocity or 80) * 100 / 90, 2)))
 
 
 def write_score_midi(score: stream.Score, path: Path) -> None:
@@ -215,21 +357,26 @@ def write_score_midi(score: stream.Score, path: Path) -> None:
         )
         program = inst.midiProgram or 0
         active = {}
-        for n in sorted(part.recurse().notes, key=lambda n: n.getOffsetInHierarchy(part)):
-            onset = float(n.getOffsetInHierarchy(part)) * 60 / bpm
-            offset = onset + float(n.quarterLength) * 60 / bpm
-            key = (str(n.id), n.pitch.midi)
-            if n.tie and n.tie.type in {"continue", "stop"} and key in active:
-                active[key].end = offset
-            else:
+        for event in sorted(part.recurse().notes, key=lambda n: n.getOffsetInHierarchy(part)):
+            onset = float(event.getOffsetInHierarchy(part)) * 60 / bpm
+            offset = onset + float(event.quarterLength) * 60 / bpm
+            components = event.notes if isinstance(event, chord.ChordBase) else [event]
+            for n in components:
+                is_drum = isinstance(n, note.Unpitched)
+                pitch_number = n.storedInstrument.percMapPitch if is_drum else n.pitch.midi
+                key = (str(n.id), pitch_number)
+                if n.tie and n.tie.type in {"continue", "stop"} and key in active:
+                    active[key].end = offset
+                    continue
                 ev = NoteEvent(
                     id=f"score-{part_index}-{n.id}",
-                    pitch=n.pitch.midi,
+                    pitch=pitch_number,
                     start=onset,
                     end=offset,
                     velocity=n.volume.velocity or 80,
                     program=program,
                     track=part_index,
+                    drum=is_drum,
                 )
                 events.append(ev)
                 active[key] = ev
@@ -254,6 +401,8 @@ def write_score_midi(score: stream.Score, path: Path) -> None:
     programs = sorted({event.program for event in events})
     channels = [c for c in range(16) if c != 9]
     for track in midi.tracks:
+        if any(hasattr(m, "channel") and m.channel == 9 for m in track):
+            continue
         program = next((m.program for m in track if m.type == "program_change"), None)
         if program is not None:
             channel = channels[programs.index(program)]

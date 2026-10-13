@@ -1,0 +1,272 @@
+id: brassaranka
+name: Brassaranka
+sources:
+- https://de.wikipedia.org/wiki/Brassaranka
+- https://www.brassaranka.at/downloads
+- https://www.brassaranka.at/_files/ugd/00e78a_67909573d10047669d756e0395d977d1.pdf
+assumptions:
+- Four flugelhorns and two trumpets follow the official 2026 stage plot; the six players
+  can double, so this is a default arrangement rather than verified Sunchyme chair
+  assignments.
+- Austrian B-flat tenor horn and baritone use transposing treble clef (sounding a
+  major ninth lower). Trombone and tuba use concert-pitch bass clef. Baritone is approximated
+  by the MuseScore euphonium template.
+- Optional vocal doubling is not inferred or added automatically.
+- Drum notation uses General MIDI percussion flags and pitches 35-81 with one grid-step
+  durations; articulation, fills and drum classification remain provisional.
+parts:
+- id: eb_clarinet
+  name: Klarinette in E♭
+  instrument_name: E♭ Clarinet
+  family: clarinet
+  typical:
+  - 58
+  - 89
+  extended:
+  - 55
+  - 94
+  clef: treble
+  written_to_sounding: m3
+  preferred_pitch: 82
+  max_simultaneous: 1
+  program: 71
+  instrument_sound: wind.reed.clarinet.eflat
+  percussion: false
+- id: bb_clarinet
+  name: Klarinette in B♭
+  instrument_name: B♭ Clarinet
+  family: clarinet
+  typical:
+  - 50
+  - 86
+  extended:
+  - 50
+  - 94
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 76
+  max_simultaneous: 1
+  program: 71
+  instrument_sound: wind.reed.clarinet
+  percussion: false
+- id: trumpet_1
+  name: 1. Trompete in B♭
+  instrument_name: B♭ Trumpet
+  family: trumpet
+  typical:
+  - 54
+  - 82
+  extended:
+  - 52
+  - 86
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 72
+  max_simultaneous: 1
+  program: 56
+  instrument_sound: brass.trumpet
+  percussion: false
+- id: trumpet_2
+  name: 2. Trompete in B♭
+  instrument_name: B♭ Trumpet
+  family: trumpet
+  typical:
+  - 54
+  - 82
+  extended:
+  - 52
+  - 86
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 65
+  max_simultaneous: 1
+  program: 56
+  instrument_sound: brass.trumpet
+  percussion: false
+- id: flugelhorn_1
+  name: 1. Flügelhorn in B♭
+  instrument_name: B♭ Flugelhorn
+  family: flugelhorn
+  typical:
+  - 54
+  - 77
+  extended:
+  - 52
+  - 82
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 71
+  max_simultaneous: 1
+  program: 56
+  instrument_sound: brass.flugelhorn
+  percussion: false
+- id: flugelhorn_2
+  name: 2. Flügelhorn in B♭
+  instrument_name: B♭ Flugelhorn
+  family: flugelhorn
+  typical:
+  - 54
+  - 77
+  extended:
+  - 52
+  - 82
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 67
+  max_simultaneous: 1
+  program: 56
+  instrument_sound: brass.flugelhorn
+  percussion: false
+- id: flugelhorn_3
+  name: 3. Flügelhorn in B♭
+  instrument_name: B♭ Flugelhorn
+  family: flugelhorn
+  typical:
+  - 54
+  - 77
+  extended:
+  - 52
+  - 82
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 63
+  max_simultaneous: 1
+  program: 56
+  instrument_sound: brass.flugelhorn
+  percussion: false
+- id: flugelhorn_4
+  name: 4. Flügelhorn in B♭
+  instrument_name: B♭ Flugelhorn
+  family: flugelhorn
+  typical:
+  - 54
+  - 77
+  extended:
+  - 52
+  - 82
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 59
+  max_simultaneous: 1
+  program: 56
+  instrument_sound: brass.flugelhorn
+  percussion: false
+- id: tenor_horn
+  name: Tenorhorn in B♭
+  instrument_name: B♭ Baritone Horn (Treble Clef)
+  family: tenor_horn
+  typical:
+  - 40
+  - 72
+  extended:
+  - 34
+  - 77
+  clef: treble
+  written_to_sounding: M-9
+  preferred_pitch: 60
+  max_simultaneous: 1
+  program: 61
+  instrument_sound: brass.baritone-horn
+  percussion: false
+- id: baritone
+  name: Bariton in B♭
+  instrument_name: B♭ Euphonium (Treble Clef)
+  family: baritone
+  typical:
+  - 40
+  - 70
+  extended:
+  - 28
+  - 77
+  clef: treble
+  written_to_sounding: M-9
+  preferred_pitch: 53
+  max_simultaneous: 1
+  program: 58
+  instrument_sound: brass.euphonium
+  percussion: false
+- id: trombone_1
+  name: 1. Posaune
+  instrument_name: Trombone
+  family: trombone
+  typical:
+  - 36
+  - 72
+  extended:
+  - 28
+  - 77
+  clef: bass
+  written_to_sounding: P1
+  preferred_pitch: 57
+  max_simultaneous: 1
+  program: 57
+  instrument_sound: brass.trombone
+  percussion: false
+- id: trombone_2
+  name: 2. Posaune
+  instrument_name: Trombone
+  family: trombone
+  typical:
+  - 36
+  - 72
+  extended:
+  - 28
+  - 77
+  clef: bass
+  written_to_sounding: P1
+  preferred_pitch: 50
+  max_simultaneous: 1
+  program: 57
+  instrument_sound: brass.trombone
+  percussion: false
+- id: trombone_3
+  name: 3. Posaune
+  instrument_name: Trombone
+  family: trombone
+  typical:
+  - 36
+  - 72
+  extended:
+  - 28
+  - 77
+  clef: bass
+  written_to_sounding: P1
+  preferred_pitch: 42
+  max_simultaneous: 1
+  program: 57
+  instrument_sound: brass.trombone
+  percussion: false
+- id: tuba
+  name: Tuba
+  instrument_name: Tuba
+  family: bass
+  typical:
+  - 28
+  - 58
+  extended:
+  - 20
+  - 67
+  clef: bass
+  written_to_sounding: P1
+  preferred_pitch: 35
+  max_simultaneous: 1
+  program: 58
+  instrument_sound: brass.tuba
+  percussion: false
+- id: drum_set
+  name: Schlagzeug
+  instrument_name: Drumset
+  family: percussion
+  typical:
+  - 35
+  - 81
+  extended:
+  - 35
+  - 81
+  clef: percussion
+  written_to_sounding: P1
+  preferred_pitch: 60
+  max_simultaneous: 8
+  program: 0
+  instrument_sound: drum.group
+  percussion: true
