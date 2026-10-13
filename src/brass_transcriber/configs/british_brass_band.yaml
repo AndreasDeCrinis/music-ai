@@ -1,0 +1,256 @@
+parts:
+- id: soprano_cornet
+  name: E♭ Soprano Cornet
+  family: cornet
+  typical:
+  - 63
+  - 87
+  extended:
+  - 57
+  - 91
+  clef: treble
+  written_to_sounding: m3
+  preferred_pitch: 78
+  max_simultaneous: 2
+  program: 56
+  instrument_sound: brass.cornet
+- id: solo_cornet
+  name: Solo B♭ Cornet
+  family: cornet
+  typical:
+  - 54
+  - 82
+  extended:
+  - 52
+  - 86
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 73
+  max_simultaneous: 2
+  program: 56
+  instrument_sound: brass.cornet
+- id: repiano_cornet
+  name: Repiano B♭ Cornet
+  family: cornet
+  typical:
+  - 54
+  - 79
+  extended:
+  - 52
+  - 84
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 70
+  max_simultaneous: 2
+  program: 56
+  instrument_sound: brass.cornet
+- id: second_cornet
+  name: Second B♭ Cornet
+  family: cornet
+  typical:
+  - 54
+  - 77
+  extended:
+  - 52
+  - 82
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 67
+  max_simultaneous: 2
+  program: 56
+  instrument_sound: brass.cornet
+- id: third_cornet
+  name: Third B♭ Cornet
+  family: cornet
+  typical:
+  - 52
+  - 74
+  extended:
+  - 52
+  - 79
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 63
+  max_simultaneous: 2
+  program: 56
+  instrument_sound: brass.cornet
+- id: flugelhorn
+  name: B♭ Flugelhorn
+  family: flugelhorn
+  typical:
+  - 54
+  - 77
+  extended:
+  - 52
+  - 82
+  clef: treble
+  written_to_sounding: M-2
+  preferred_pitch: 65
+  max_simultaneous: 2
+  program: 56
+  instrument_sound: brass.flugelhorn
+- id: solo_horn
+  name: Solo E♭ Tenor Horn
+  family: horn
+  typical:
+  - 45
+  - 75
+  extended:
+  - 39
+  - 79
+  clef: treble
+  written_to_sounding: M-6
+  preferred_pitch: 64
+  max_simultaneous: 2
+  program: 60
+  instrument_sound: brass.alto-horn
+- id: first_horn
+  name: First E♭ Tenor Horn
+  family: horn
+  typical:
+  - 45
+  - 72
+  extended:
+  - 39
+  - 77
+  clef: treble
+  written_to_sounding: M-6
+  preferred_pitch: 60
+  max_simultaneous: 2
+  program: 60
+  instrument_sound: brass.alto-horn
+- id: second_horn
+  name: Second E♭ Tenor Horn
+  family: horn
+  typical:
+  - 43
+  - 69
+  extended:
+  - 39
+  - 75
+  clef: treble
+  written_to_sounding: M-6
+  preferred_pitch: 55
+  max_simultaneous: 2
+  program: 60
+  instrument_sound: brass.alto-horn
+- id: first_baritone
+  name: First B♭ Baritone
+  family: baritone
+  typical:
+  - 40
+  - 70
+  extended:
+  - 34
+  - 77
+  clef: treble
+  written_to_sounding: M-9
+  preferred_pitch: 56
+  max_simultaneous: 2
+  program: 61
+  instrument_sound: brass.baritone-horn
+- id: second_baritone
+  name: Second B♭ Baritone
+  family: baritone
+  typical:
+  - 40
+  - 67
+  extended:
+  - 34
+  - 74
+  clef: treble
+  written_to_sounding: M-9
+  preferred_pitch: 51
+  max_simultaneous: 2
+  program: 61
+  instrument_sound: brass.baritone-horn
+- id: first_trombone
+  name: First B♭ Trombone
+  family: trombone
+  typical:
+  - 40
+  - 72
+  extended:
+  - 34
+  - 77
+  clef: treble
+  written_to_sounding: M-9
+  preferred_pitch: 58
+  max_simultaneous: 2
+  program: 57
+  instrument_sound: brass.trombone
+- id: second_trombone
+  name: Second B♭ Trombone
+  family: trombone
+  typical:
+  - 40
+  - 67
+  extended:
+  - 34
+  - 74
+  clef: treble
+  written_to_sounding: M-9
+  preferred_pitch: 52
+  max_simultaneous: 2
+  program: 57
+  instrument_sound: brass.trombone
+- id: bass_trombone
+  name: Bass Trombone
+  family: trombone
+  typical:
+  - 29
+  - 60
+  extended:
+  - 22
+  - 70
+  clef: bass
+  written_to_sounding: P1
+  preferred_pitch: 40
+  max_simultaneous: 2
+  program: 57
+  instrument_sound: brass.trombone.bass
+- id: euphonium
+  name: B♭ Euphonium
+  family: euphonium
+  typical:
+  - 40
+  - 75
+  extended:
+  - 28
+  - 82
+  clef: treble
+  written_to_sounding: M-9
+  preferred_pitch: 59
+  max_simultaneous: 2
+  program: 58
+  instrument_sound: brass.euphonium
+- id: eb_bass
+  name: E♭ Bass
+  family: bass
+  typical:
+  - 28
+  - 58
+  extended:
+  - 24
+  - 67
+  clef: treble
+  written_to_sounding: M-13
+  preferred_pitch: 43
+  max_simultaneous: 2
+  program: 58
+  instrument_sound: brass.tuba
+- id: bb_bass
+  name: B♭ Bass
+  family: bass
+  typical:
+  - 22
+  - 53
+  extended:
+  - 20
+  - 65
+  clef: treble
+  written_to_sounding: M-16
+  preferred_pitch: 34
+  max_simultaneous: 2
+  program: 58
+  instrument_sound: brass.tuba

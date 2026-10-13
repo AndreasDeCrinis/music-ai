@@ -1,0 +1,87 @@
+{
+  "date": "2026-10-13",
+  "machine": {
+    "chip": "Apple M4 Pro",
+    "memory_gb": 24,
+    "macos": "27.0",
+    "python": "3.11.16",
+    "torch": "2.14.1",
+    "hardware_mps_available": true,
+    "backend_device": "cpu"
+  },
+  "backend": "YourMT3+ via pinned MT3-Infer",
+  "checkpoint_sha256": "ae38e415c79efd5592dcb9b658cdb99ddb11d4c4e1eaa364cab04a052473fc25",
+  "real_wav_midi_only": {
+    "duration_seconds": 4,
+    "notes": 8
+  },
+  "real_mp3_pipeline": {
+    "input": "examples/guitar_excerpt.mp3",
+    "start": 1,
+    "duration": 7,
+    "chunk_seconds": 5,
+    "overlap_seconds": 1,
+    "notes": 12,
+    "inference_runtime_seconds": 5.4970599579392,
+    "musicxml_parts": 17,
+    "native_musescore_created": true,
+    "musescore_playback_pitch_and_onset_agreement": true,
+    "musescore_playback_notes": 12
+  },
+  "tests": {
+    "passed": 27,
+    "ruff": "passed",
+    "wheel_build": "passed",
+    "warning": "MuseScore-exported MIDI has tempo metadata on nonzero tracks; pretty_midi warns, pitch/onset comparison passes."
+  },
+  "diagnostic_comparison": {
+    "raw_notes": 12,
+    "assigned_source_notes": 12,
+    "unassigned_source_notes": 0,
+    "invented_source_notes": 0,
+    "source_pitch_histogram": {
+      "53": 1,
+      "56": 2,
+      "58": 3,
+      "60": 1,
+      "61": 2,
+      "63": 1,
+      "66": 1,
+      "70": 1
+    },
+    "score_events_before_ties": 12,
+    "score_midi_notes": 12,
+    "assigned_pitch_histogram": {
+      "53": 1,
+      "56": 2,
+      "58": 3,
+      "60": 1,
+      "61": 2,
+      "63": 1,
+      "66": 1,
+      "70": 1
+    },
+    "score_pitch_histogram": {
+      "53": 1,
+      "56": 2,
+      "58": 3,
+      "60": 1,
+      "61": 2,
+      "63": 1,
+      "66": 1,
+      "70": 1
+    },
+    "pitch_counts_preserved": true,
+    "max_onset_quantization_shift_seconds": 0.05520833333333286,
+    "quantization_adjustments": []
+  },
+  "limitations": [
+    "Sample is guitar; no brass recording supplied, so brass accuracy unvalidated.",
+    "CPU only for selected model; MPS unavailable in this backend.",
+    "Assignments are provisional, confidence heuristic.",
+    "Global tempo quantization; meter/downbeats not inferred.",
+    "Percussion retained in raw MIDI, not notated.",
+    "Source separation not implemented."
+  ],
+  "outputs": "output-final/"
+}
