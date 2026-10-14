@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from .models import Assignment, NoteEvent, PartConfig
+from .models import Assignment, NoteEvent, PartConfig, evidence_groups
 from .rhythm import Rhythm
 from .voice_identity import link_voices
 
@@ -90,7 +90,7 @@ def available(phrase: Phrase, part: PartConfig, state: PhraseState) -> bool:
     )
 
 
-def phrase_cost(phrase: Phrase, part: PartConfig, known_programs: set[int]) -> float | None:
+def phrase_cost(phrase: Phrase, part: PartConfig, known_programs: dict[int, int]) -> float | None:
     if part.percussion or any(
         not part.extended[0] <= n.pitch <= part.extended[1] for n in phrase.notes
     ):
@@ -101,10 +101,12 @@ def phrase_cost(phrase: Phrase, part: PartConfig, known_programs: set[int]) -> f
     range_penalty = sum(
         n.end - n.start for n in phrase.notes if not part.typical[0] <= n.pitch <= part.typical[1]
     ) / sum(durations)
-    votes = Counter(n.program for n in phrase.notes if n.program in known_programs)
+    votes = Counter(known_programs[n.program] for n in phrase.notes if n.program in known_programs)
     # Ignore unsupported predicted instrument families rather than systematically
     # rewarding an arbitrary brass instrument for "strings" or "guitar" predictions.
-    program_penalty = 0.9 * (1 - votes.get(part.program, 0) / sum(votes.values())) if votes else 0
+    groups = {known_programs[p] for p in part.evidence_programs if p in known_programs}
+    supporting = sum(votes[g] for g in groups)
+    program_penalty = 0.9 * (1 - supporting / sum(votes.values())) if votes else 0
     orphan_penalty = 0.18 if len(phrase.notes) == 1 and durations[0] < 0.12 else 0
     return (
         abs(center - part.preferred_pitch) / 12 + range_penalty + program_penalty + orphan_penalty
@@ -142,7 +144,7 @@ def assign_phrases(
         range(len(phrases)),
         key=lambda i: (phrases[i].start, -np.mean([n.pitch for n in phrases[i].notes])),
     )
-    known = {p.program for p in parts if not p.percussion}
+    known = evidence_groups(parts)
     links = link_voices(phrases, rhythm, known) if persistent else {}
     part_by_id = {p.id: p for p in parts}
     beam = [PhraseState()]
@@ -295,3 +297,44 @@ def assign_phrases(
         phrase_count=len(details),
         mean_phrase_notes=float(np.mean([len(p.notes) for p in phrases])) if phrases else 0,
     )
+
+
+def add_phrases(
+    assignments: list[Assignment], notes: list[NoteEvent], parts: list[PartConfig]
+) -> list[Assignment]:
+    """Place extra notes into parts that are free; existing assignments never move."""
+    known = evidence_groups(parts)
+    occupied: dict[str, list[NoteEvent]] = {p.id: [] for p in parts}
+    for a in assignments:
+        if a.part in occupied:
+            occupied[a.part].append(a.note)
+    added = []
+    for phrase in sorted(track_phrases(notes), key=lambda p: (p.start, p.id)):
+        options = []
+        for part in parts:
+            cost = phrase_cost(phrase, part, known)
+            if cost is None or any(
+                sum(
+                    other.start < n.end - 0.01 and other.end > n.start + 0.01
+                    for other in occupied[part.id]
+                )
+                >= part.max_simultaneous
+                for n in phrase.notes
+            ):
+                continue
+            options.append((cost, part.id))
+        part_id = min(options)[1] if options else None
+        if part_id:
+            occupied[part_id].extend(phrase.notes)
+        added.extend(
+            Assignment(
+                note=n,
+                part=part_id,
+                confidence=0.3 if part_id else 0,
+                reason=f"listener note added to free part: listener-{phrase.id}"
+                if part_id
+                else f"listener note; no free part for listener-{phrase.id}; retained for review",
+            )
+            for n in phrase.notes
+        )
+    return assignments + added

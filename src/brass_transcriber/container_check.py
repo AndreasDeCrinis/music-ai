@@ -29,7 +29,9 @@ def main():
             )
             for part in parts
         ]
-        score, _ = build_score(assignments, parts, Rhythm(tempo=120, detected_tempo=None, beats=[]), 2)
+        score, _ = build_score(
+            assignments, parts, Rhythm(tempo=120, detected_tempo=None, beats=[]), 2
+        )
         export_score(score, output)
         warning = musescore_export(output)
         if warning:

@@ -37,8 +37,25 @@ class PartConfig(BaseModel):
     preferred_pitch: int
     max_simultaneous: int = Field(default=2, ge=1)
     program: int
+    # Model output programs counted as evidence for this part. YourMT3 rarely emits
+    # the exact GM program for band woodwinds (e.g. clarinet as soprano/alto sax).
+    model_programs: list[int] = Field(default_factory=list)
     instrument_sound: str
     percussion: bool = False
+
+    @property
+    def evidence_programs(self) -> set[int]:
+        return set(self.model_programs) | {self.program}
+
+
+def evidence_groups(parts: list[PartConfig]) -> dict[int, int]:
+    """Map each model program that is evidence for a part to that part's own program."""
+    groups: dict[int, int] = {}
+    for p in parts:
+        if not p.percussion:
+            for program in sorted(p.evidence_programs):
+                groups.setdefault(program, p.program)
+    return groups
 
 
 class EnsemblePreset(str, Enum):

@@ -6,7 +6,7 @@ services:
       target: app
     init: true
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${BRASS_BIND:-127.0.0.1}:8000:8000"
     volumes:
       - jobs:/data
       - models:/models
@@ -31,6 +31,7 @@ services:
         brass-transcribe download-model --cache /models --variant nops
         brass-transcribe download-model --cache /models --variant ps
         brass-transcribe download-model --cache /models --variant beats
+        brass-transcribe download-model --cache /models --variant separation
         python -c "from pathlib import Path; from brass_transcriber.backend import prepare_ps_checkpoint; prepare_ps_checkpoint(Path('/models'))"
 volumes:
   jobs:

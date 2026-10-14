@@ -15,6 +15,7 @@ from music21.exceptions21 import Music21Exception
 from .audio import preprocess
 from .backend import CHECKPOINT_NAME, PS_CHECKPOINT_NAME, PS_SHA256, YourMT3Backend
 from .diagnostics import piano_roll, report
+from .listeners import SEPARATION_SHA256, SEPARATION_URL, SEPARATION_WEIGHTS
 from .models import (
     Assignment,
     EnsembleConfig,
@@ -40,7 +41,7 @@ SHA256 = "ae38e415c79efd5592dcb9b658cdb99ddb11d4c4e1eaa364cab04a052473fc25"
 
 @app.command()
 def download_model(cache: Path = CACHE, variant: str = "nops"):
-    """Download and verify nops, ps, or beats weights explicitly."""
+    """Download and verify nops, ps, beats, or separation weights explicitly."""
     target = cache / "yourmt3" / CHECKPOINT_NAME / "last.ckpt"
     url = f"https://huggingface.co/spaces/mimbres/YourMT3/resolve/main/amt/logs/2024/{CHECKPOINT_NAME}/checkpoints/last.ckpt"
     expected, size = SHA256, "536 MB"
@@ -53,8 +54,11 @@ def download_model(cache: Path = CACHE, variant: str = "nops"):
         url = "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt"
         expected = "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331"
         size = "78 MB"
+    elif variant == "separation":
+        target = cache / SEPARATION_WEIGHTS
+        url, expected, size = SEPARATION_URL, SEPARATION_SHA256, "335 MB"
     elif variant != "nops":
-        raise typer.BadParameter("Variant must be nops, ps or beats")
+        raise typer.BadParameter("Variant must be nops, ps, beats or separation")
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(".partial")
     if not target.exists():
@@ -348,12 +352,27 @@ def resume(
         if assignment_changed:
             effective_path = intermediate / "quality_notes.json"
             if effective_path.exists():
-                from .phrases import assign_phrases
+                from .phrases import add_phrases, assign_phrases
 
                 effective = [
                     NoteEvent.model_validate(n) for n in json.loads(effective_path.read_text())
                 ]
-                assignments, _ = assign_phrases(effective, parts, rhythm=rhythm)
+                decisions_path = intermediate / "quality_decisions.json"
+                dependent = (
+                    {
+                        d["id"]
+                        for d in json.loads(decisions_path.read_text())
+                        if d.get("listener_dependent")
+                    }
+                    if decisions_path.exists()
+                    else set()
+                )
+                assignments, _ = assign_phrases(
+                    [n for n in effective if n.id not in dependent], parts, rhythm=rhythm
+                )
+                assignments = add_phrases(
+                    assignments, [n for n in effective if n.id in dependent], parts
+                )
                 retained = {n.id for n in effective}
                 assignments.extend(
                     Assignment(
@@ -430,13 +449,21 @@ def improve(
     cache: Path = CACHE,
     tempo: float | None = typer.Option(None, min=20, max=400),
     mscz: bool = typer.Option(True, "--mscz/--no-mscz"),
+    listener: bool = typer.Option(
+        True,
+        "--listener/--no-listener",
+        help="Add Basic Pitch on drums/bass-removed audio for upper-register lines",
+    ),
+    device: str = typer.Option("auto", help="auto (CUDA if available), cpu or cuda"),
 ):
     """Run slower local multi-pass transcription, neural timing and phrase assignment."""
     from .quality import improve_run
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
-        run = improve_run(source, output, cache, ensemble, passes, beam_size, tempo)
+        run = improve_run(
+            source, output, cache, ensemble, passes, beam_size, tempo, listener, device
+        )
         save_run_settings(
             output, run.rhythm, run.duration, run.start, run.ensemble.parts, run.ensemble
         )

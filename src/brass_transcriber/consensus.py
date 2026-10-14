@@ -32,8 +32,12 @@ def match_cost(a: NoteEvent, b: NoteEvent) -> float | None:
 
 
 def build_consensus(
-    passes: dict[str, TranscriptionResult], primary: str, evidence: PitchEvidence | None = None
+    passes: dict[str, TranscriptionResult],
+    primary: str,
+    evidence: PitchEvidence | None = None,
+    trusted: frozenset[str] = frozenset(),
 ) -> tuple[TranscriptionResult, list[NoteEvent], list[dict]]:
+    """Select notes; alternate-only notes from `trusted` passes were already filtered."""
     groups = []
     for pass_id in [primary] + [p for p in passes if p != primary]:
         used = set()
@@ -62,20 +66,22 @@ def build_consensus(
     decisions = []
     for index, g in enumerate(groups):
         primary_observation = next((n for p, n in g.observations if p == primary), None)
-        representative = primary_observation or g.anchor
+        # Trusted listeners confirm notes but do not alter YourMT3 timing or labels.
+        timed = [(p, n) for p, n in g.observations if p not in trusted] or g.observations
+        representative = primary_observation or timed[0][1]
         # Primary model timing is authoritative when available. Median alternate
         # times are used only for additional supported hypotheses.
         start = (
             representative.start
             if primary_observation
-            else float(np.median([n.start for _, n in g.observations]))
+            else float(np.median([n.start for _, n in timed]))
         )
         end = (
             representative.end
             if primary_observation
-            else float(np.median([n.end for _, n in g.observations]))
+            else float(np.median([n.end for _, n in timed]))
         )
-        votes = Counter(n.program for _, n in g.observations)
+        votes = Counter(n.program for _, n in timed)
         program = representative.program if primary_observation else votes.most_common(1)[0][0]
         n = representative.model_copy(
             update=dict(
@@ -88,30 +94,44 @@ def build_consensus(
         )
         support = len({p for p, _ in g.observations})
         salience = evidence.support(n) if evidence is not None and not n.drum else None
-        if n.drum:
-            keep = primary_observation is not None or support >= 2
-            reason = (
-                "primary drum detection or agreement of distinct passes"
-                if keep
-                else "unsupported alternate-only drum hit"
-            )
-        elif primary_observation is not None:
-            weak = support == 1 and end - start < 0.075 and salience is not None and salience < 0.04
-            keep = not weak
-            reason = (
-                "retained primary-model note"
-                if keep
-                else "very short, single-pass note with weak harmonic evidence"
-            )
-        else:
+
+        def decide(support: int) -> tuple[bool, str]:
+            if n.drum:
+                keep = primary_observation is not None or support >= 2
+                return keep, (
+                    "primary drum detection or agreement of distinct passes"
+                    if keep
+                    else "unsupported alternate-only drum hit"
+                )
+            if primary_observation is not None:
+                weak = (
+                    support == 1
+                    and end - start < 0.075
+                    and salience is not None
+                    and salience < 0.04
+                )
+                return not weak, (
+                    "very short, single-pass note with weak harmonic evidence"
+                    if weak
+                    else "retained primary-model note"
+                )
             keep = support >= 2 or (
                 salience is not None and salience >= 0.65 and end - start >= 0.12
             )
-            reason = (
+            return keep, (
                 "alternate-pass agreement or strong harmonic evidence"
                 if keep
                 else "unsupported alternate-only note"
             )
+
+        base_support = len({p for p, _ in g.observations if p not in trusted})
+        if base_support:
+            keep, reason = decide(support)
+        else:
+            keep, reason = True, "separated upper-register listener note"
+        # Notes kept only because of a trusted listener are placed after, never
+        # instead of, the YourMT3 assignment so they cannot displace other parts.
+        listener_dependent = keep and not (base_support and decide(base_support)[0])
         all_notes.append(n)
         if keep:
             selected.append(n)
@@ -122,6 +142,7 @@ def build_consensus(
                 reason=reason,
                 primary_support=primary_observation is not None,
                 pass_support=support,
+                listener_dependent=listener_dependent,
                 audio_salience=salience,
                 pitch=n.pitch,
                 start=n.start,
@@ -140,10 +161,29 @@ def build_consensus(
                 ],
             )
         )
+    # Listener-dependent notes must not duplicate a kept same-pitch note with shifted timing.
+    dependent = {d["id"] for d in decisions if d["listener_dependent"]}
+    anchors = {}
+    for other in selected:
+        if other.id not in dependent:
+            anchors.setdefault(other.pitch, []).append(other)
+    duplicates = set()
+    for decision, n in zip(decisions, all_notes):
+        if n.id in dependent and any(
+            min(other.end, n.end) - max(other.start, n.start) > 0.3 * (n.end - n.start)
+            for other in anchors.get(n.pitch, [])
+        ):
+            decision.update(
+                action="reject",
+                reason="listener note duplicates a kept note",
+                listener_dependent=False,
+            )
+            duplicates.add(n.id)
+    selected = [n for n in selected if n.id not in duplicates]
     result = TranscriptionResult(
         notes=all_notes,
         model=f"YourMT3+ multi-pass hypotheses (primary {primary})",
-        device="cpu",
+        device=passes[primary].device,
         runtime=sum(r.runtime for r in passes.values()),
         warnings=[
             "Multi-pass agreement and harmonic salience are heuristics, not calibrated accuracy probabilities.",

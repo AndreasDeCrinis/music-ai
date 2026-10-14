@@ -23,7 +23,15 @@ dependencies = [
     "torch",
     "torchaudio",
     "torchvision",
+    "basic-pitch==0.4.0",
+    "onnxruntime>=1.18",
+    # resampy (a Basic Pitch dependency) still imports pkg_resources.
+    "setuptools<81",
 ]
+[project.optional-dependencies]
+# Linux images select a PyTorch build explicitly; macOS uses the default PyPI wheels.
+cpu = ["torch", "torchaudio", "torchvision"]
+cu126 = ["torch", "torchaudio", "torchvision"]
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.9", "httpx>=0.27"]
 [project.scripts]
@@ -42,14 +50,36 @@ line-length = 100
 select = ["E", "F", "I"]
 ignore = ["E501"]
 
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cu126" }]]
+# Basic Pitch runs on its bundled ONNX model; its TensorFlow/CoreML backends are not used.
+override-dependencies = [
+    "tensorflow; sys_platform == 'never'",
+    "tensorflow-macos; sys_platform == 'never'",
+    "coremltools; sys_platform == 'never'",
+]
+
 [tool.uv.sources]
 madmom = { git = "https://github.com/CPJKU/madmom.git", rev = "27f032e8947204902c675e5e341a3faf5dc86dae" }
-torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
-torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
-torchvision = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torch = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", extra = "cu126", marker = "sys_platform == 'linux'" },
+]
+torchaudio = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", extra = "cu126", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", extra = "cu126", marker = "sys_platform == 'linux'" },
+]
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 [tool.hatch.metadata]
 allow-direct-references = true

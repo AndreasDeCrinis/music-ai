@@ -14,6 +14,7 @@ import soundfile as sf
 from .backend import YourMT3Backend, prepare_ps_checkpoint
 from .consensus import build_consensus
 from .evidence import analyze_evidence
+from .listeners import SEPARATION_WEIGHTS, basic_pitch_notes, remove_rhythm_section
 from .models import (
     Assignment,
     EnsembleConfig,
@@ -22,7 +23,7 @@ from .models import (
     load_ensemble,
     write_midi,
 )
-from .phrases import assign_phrases
+from .phrases import add_phrases, assign_phrases
 from .rhythm import Rhythm, quantize, quarters_to_seconds
 from .rhythm_quality import analyze_quality
 
@@ -48,6 +49,8 @@ def improve_run(
     passes: int = 4,
     beam_size: int = 64,
     tempo_override: float | None = None,
+    listener: bool = True,
+    device: str = "auto",
 ) -> QualityRun:
     if source.resolve() == output.resolve():
         raise ValueError(
@@ -75,6 +78,10 @@ def improve_run(
     prepare_ps_checkpoint(cache)
     if not (cache / "beat_this/final0.ckpt").exists():
         raise FileNotFoundError("Run brass-transcribe download-model --variant beats first")
+    if listener and not (cache / SEPARATION_WEIGHTS).exists():
+        raise FileNotFoundError(
+            "Run brass-transcribe download-model --variant separation first, or use --no-listener"
+        )
     intermediate = output / "intermediate"
     intermediate.mkdir(parents=True)
     (output / "diagnostics").mkdir()
@@ -97,6 +104,7 @@ def improve_run(
         start,
         original_rhythm.pickup,
         tempo_override,
+        device,
     )
     rhythm = Rhythm.model_validate({**rhythm.model_dump(), "notation_mode": "phrases"})
     log.info("Quality: harmonic-template audio evidence")
@@ -123,6 +131,7 @@ def improve_run(
             start,
             chunk,
             overlap,
+            device=device,
             variant="ps",
             pass_id=pass_id + "_",
         )
@@ -142,8 +151,18 @@ def improve_run(
             )
         )
         results[pass_id] = prediction
+    trusted = frozenset()
+    if listener:
+        log.info("Quality: upper-register listener on drums/bass-removed audio")
+        directory = variants / "separated"
+        directory.mkdir()
+        separated = remove_rhythm_section(audio, directory / "input.wav", cache, device=device)
+        prediction = basic_pitch_notes(separated, start, "separated_")
+        (directory / "model_notes.json").write_text(prediction.model_dump_json(indent=2))
+        results["separated"] = prediction
+        trusted = frozenset({"separated"})
     log.info("Quality: combine hypotheses, retaining disagreement and provenance")
-    result, selected, decisions = build_consensus(results, "ps", evidence)
+    result, selected, decisions = build_consensus(results, "ps", evidence, trusted)
     (intermediate / "quality_decisions.json").write_text(json.dumps(decisions, indent=2))
     (intermediate / "model_notes.json").write_text(result.model_dump_json(indent=2))
     (intermediate / "quality_notes.json").write_text(
@@ -152,7 +171,13 @@ def improve_run(
     write_midi(result.notes, intermediate / "raw_transcription.mid", rhythm.tempo)
     write_midi(selected, intermediate / "selected_transcription.mid", rhythm.tempo)
     log.info("Quality: track melodic voices and assign complete phrases")
-    assignments, phrases = assign_phrases(selected, ensemble.parts, beam_size, rhythm=rhythm)
+    dependent = {d["id"] for d in decisions if d["listener_dependent"]}
+    assignments, phrases = assign_phrases(
+        [n for n in selected if n.id not in dependent], ensemble.parts, beam_size, rhythm=rhythm
+    )
+    assignments = add_phrases(
+        assignments, [n for n in selected if n.id in dependent], ensemble.parts
+    )
     (intermediate / "phrases.json").write_text(json.dumps(phrases, indent=2))
     selected_ids = {n.id for n in selected}
     rejected = {d["id"]: d for d in decisions if d["action"] == "reject"}

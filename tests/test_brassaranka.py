@@ -66,6 +66,20 @@ def test_routes_supported_drums_and_preserves_unknowns():
     assert assign_voices(notes, load_parts())[0].part is None
 
 
+def test_reed_predictions_count_as_clarinet_evidence():
+    from brass_transcriber.phrases import assign_phrases
+
+    parts = load_parts(preset=EnsemblePreset.BRASSARANKA)
+    # A mid-register line that register alone would give to a flugelhorn.
+    notes = [
+        NoteEvent(id=f"sax-{i}", pitch=p, start=i * 0.5, end=i * 0.5 + 0.45, program=65)
+        for i, p in enumerate([70, 72, 74, 72, 70, 69])
+    ]
+    assert {a.part for a in assign_voices(notes, parts)} <= {"bb_clarinet", "eb_clarinet"}
+    assignments, _ = assign_phrases(notes, parts)
+    assert {a.part for a in assignments} == {"bb_clarinet"}
+
+
 def drum_fixture():
     notes = [
         NoteEvent(id=f"hit-{i}", pitch=p, start=t, end=t + 0.1, drum=True, velocity=70 + i)

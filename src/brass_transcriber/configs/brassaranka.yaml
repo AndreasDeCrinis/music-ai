@@ -30,6 +30,7 @@ parts:
   preferred_pitch: 82
   max_simultaneous: 1
   program: 71
+  model_programs: [64, 65, 66, 67, 68, 69, 70, 71]
   instrument_sound: wind.reed.clarinet.eflat
   percussion: false
 - id: bb_clarinet
@@ -47,6 +48,7 @@ parts:
   preferred_pitch: 76
   max_simultaneous: 1
   program: 71
+  model_programs: [64, 65, 66, 67, 68, 69, 70, 71]
   instrument_sound: wind.reed.clarinet
   percussion: false
 - id: trumpet_1

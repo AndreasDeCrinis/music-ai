@@ -91,6 +91,62 @@ def test_duplicate_notes_in_one_pass_do_not_count_as_agreement():
     assert len(selected) == 1 and len(selected[0].provenance) == 2
 
 
+def test_listener_only_notes_are_kept_unless_they_duplicate_a_kept_note():
+    passes = {
+        "ps": prediction([event("melody", pitch=80, start=0, end=1)]),
+        # Same pitch, onset outside the matching tolerance: a timing-shifted duplicate.
+        "separated": prediction(
+            [event("shifted", pitch=80, start=0.2, end=1), event("clarinet", pitch=83, end=1)]
+        ),
+        "up": prediction([event("alone", pitch=88)]),
+    }
+    _, selected, decisions = build_consensus(passes, "ps", trusted=frozenset({"separated"}))
+    reasons = {d["sources"][0]["note_id"]: d["reason"] for d in decisions}
+    assert {n.pitch for n in selected} == {80, 83}
+    assert reasons["shifted"] == "listener note duplicates a kept note"
+    assert reasons["clarinet"] == "separated upper-register listener note"
+    assert reasons["alone"] == "unsupported alternate-only note"
+    _, selected, _ = build_consensus(passes, "ps")
+    assert {n.pitch for n in selected} == {80}
+
+
+def test_listener_confirms_without_changing_timing_and_flags_dependence():
+    passes = {
+        "ps": prediction([]),
+        "up": prediction([event("up", pitch=80, start=0, end=1)]),
+        "down": prediction([event("down", pitch=80, start=0.02, end=1.1)]),
+        "separated": prediction(
+            [event("confirm", pitch=80, start=0.05, end=2), event("only", pitch=84, end=1)]
+        ),
+    }
+    _, selected, decisions = build_consensus(passes, "ps", trusted=frozenset({"separated"}))
+    confirmed = next(n for n in selected if n.pitch == 80)
+    assert (confirmed.start, confirmed.end) == (0.01, 1.05)
+    flags = {d["pitch"]: d["listener_dependent"] for d in decisions}
+    assert flags == {80: False, 84: True}
+
+
+def test_added_listener_phrases_never_move_existing_assignments():
+    from brass_transcriber.phrases import add_phrases
+
+    parts = load_parts(preset=EnsemblePreset.BRASSARANKA)
+    held = NoteEvent(id="held", pitch=82, start=0, end=2)
+    existing = [Assignment(note=held, part="eb_clarinet", confidence=0.5, reason="fixture")]
+    extra = [NoteEvent(id="new", pitch=83, start=0.5, end=1.5)]
+    result = add_phrases(existing, extra, parts)
+    assert result[0] == existing[0]
+    assert next(a for a in result if a.note.id == "new").part not in {None, "eb_clarinet"}
+
+
+def test_octave_shadow_filters_weak_overtones_only():
+    from brass_transcriber.listeners import octave_shadow
+
+    melody = (0.0, 1.0, 68, 0.8)
+    assert octave_shadow((0.0, 1.0, 80, 0.3), [melody])
+    assert not octave_shadow((0.0, 1.0, 80, 0.7), [melody])
+    assert not octave_shadow((0.0, 1.0, 81, 0.3), [melody])
+
+
 def test_weak_short_rejection_is_auditable_and_reversible():
     evidence = PitchEvidence(
         np.array([[0.0, 0.0], [1.0, 1.0]]), np.array([0.0, 0.1]), np.array([60, 61])

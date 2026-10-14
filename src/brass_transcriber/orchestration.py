@@ -57,7 +57,7 @@ def assign_voices(
                         continue
                     cost = abs(n.pitch - p.preferred_pitch) / 12
                     cost += 1.0 if not p.typical[0] <= n.pitch <= p.typical[1] else 0
-                    cost += 0 if n.program == p.program else 0.8
+                    cost += 0 if n.program in p.evidence_programs else 0.8
                     previous = state.history.get(p.id)
                     if previous and n.start - previous[0] < 2:
                         cost += abs(n.pitch - previous[1]) / 18

@@ -10,7 +10,8 @@ __pycache__/
 dist/
 .DS_Store
 sunchyme
-sunchyme-brassaranka/
+sunchyme-*
 *.mp3
 sunchyme-brassaranka
 web-data/
+blechmans-god-is-a-girl

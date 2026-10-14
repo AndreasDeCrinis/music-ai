@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 from pydantic import BaseModel
 
+from .backend import resolve_device
 from .rhythm import Rhythm, analyze, grid_quarters, regularize_tempo
 
 
@@ -20,7 +21,12 @@ class BeatAnalysis(BaseModel):
 
 
 def neural_beats(
-    audio: Path, checkpoint: Path, meter: str, prior_tempo: float, artifacts: Path
+    audio: Path,
+    checkpoint: Path,
+    meter: str,
+    prior_tempo: float,
+    artifacts: Path,
+    device: str = "auto",
 ) -> BeatAnalysis:
     import torch
     from beat_this.inference import Audio2Frames
@@ -34,7 +40,8 @@ def neural_beats(
     y, sr = sf.read(audio, dtype="float32")
     torch.set_num_threads(min(8, torch.get_num_threads()))
     started = time.perf_counter()
-    model = Audio2Frames(checkpoint_path=str(checkpoint), device="cpu", float16=False)
+    device = resolve_device(device)
+    model = Audio2Frames(checkpoint_path=str(checkpoint), device=device, float16=False)
     beat_logits, downbeat_logits = model(y, sr)
     bp = beat_logits.double().sigmoid().cpu().numpy()
     dp = downbeat_logits.double().sigmoid().cpu().numpy()
@@ -64,6 +71,7 @@ def neural_beats(
         downbeats=decoded[decoded[:, 1] == 1, 0].tolist(),
         beat_numbers=decoded[:, 1].astype(int).tolist(),
         runtime=time.perf_counter() - started,
+        device=device,
     )
     (artifacts / "beat_predictions.json").write_text(result.model_dump_json(indent=2))
     return result
@@ -155,12 +163,13 @@ def analyze_quality(
     start: float = 0,
     pickup: float = 0,
     tempo_override: float | None = None,
+    device: str = "auto",
 ) -> Rhythm:
     baseline = analyze(audio, tempo_override, meter, grid, start, pickup)
     if tempo_override is not None:
         baseline.warnings.append("Manual tempo override uses constant-tempo quantization.")
         return baseline
     prediction = neural_beats(
-        audio, cache / "beat_this/final0.ckpt", meter, baseline.tempo, artifacts
+        audio, cache / "beat_this/final0.ckpt", meter, baseline.tempo, artifacts, device
     )
     return regularize_tempo(beat_rhythm(prediction, meter, grid, start, pickup))

@@ -15,6 +15,19 @@ PS_CHECKPOINT_NAME = "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_
 PS_SHA256 = "7427055b51c3c8c86f6a35493cf0741d8db29186052055b59193590a82e6ec01"
 
 
+def resolve_device(device: str = "auto") -> str:
+    """CUDA when available; the YourMT3 adapter does not support MPS, so macOS uses CPU."""
+    import torch
+
+    if device not in {"auto", "cpu", "cuda"}:
+        raise ValueError("Device must be auto, cpu or cuda")
+    if device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA was requested but no CUDA GPU is available")
+    return device
+
+
 def deduplicate(notes: list[NoteEvent], tolerance: float = 0.12) -> list[NoteEvent]:
     """Merge boundary duplicates; keep rapid repetitions with distinct attacks."""
     result: list[NoteEvent] = []
@@ -55,11 +68,10 @@ class YourMT3Backend:
     ):
         if chunk_seconds <= 2 * overlap or overlap < 0:
             raise ValueError("chunk-seconds must exceed twice the nonnegative overlap")
-        if device not in {"auto", "cpu"}:
-            raise ValueError(
-                "This verified MT3-Infer backend supports CPU on Mac; MPS is unsupported"
-            )
+        if device not in {"auto", "cpu", "cuda"}:
+            raise ValueError("Device must be auto, cpu or cuda; the YourMT3 adapter lacks MPS")
         self.cache, self.raw_dir, self.start = cache, raw_dir, start
+        self.device = device
         self.chunk_seconds, self.overlap = chunk_seconds, overlap
         if variant not in {"nops", "ps"}:
             raise ValueError("YourMT3 variant must be nops or ps")
@@ -78,13 +90,14 @@ class YourMT3Backend:
             )
         os.environ["MT3_CHECKPOINT_DIR"] = str(self.cache.resolve())
         torch.set_num_threads(min(8, os.cpu_count() or 1))
-        log.info("YourMT3+ inference device: cpu (MPS unsupported by selected adapter)")
+        device = resolve_device(self.device)
+        log.info("YourMT3+ inference device: %s (MPS unsupported by selected adapter)", device)
         started = time.perf_counter()
         if self.variant == "nops":
             model = load_model(
                 "yourmt3",
                 checkpoint_path=str(checkpoint.resolve()),
-                device="cpu",
+                device=device,
                 auto_download=False,
             )
         else:
@@ -97,7 +110,7 @@ class YourMT3Backend:
                     return "yptf_moe_ps"
 
             model = SelectedAdapter(model_key="yptf_moe_ps")
-            model.load_model(str(checkpoint.resolve()), device="cpu")
+            model.load_model(str(checkpoint.resolve()), device=device)
         notes = []
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         with sf.SoundFile(audio_path) as audio:
@@ -137,7 +150,7 @@ class YourMT3Backend:
         return TranscriptionResult(
             notes=notes,
             model=f"YourMT3+ YPTF.MoE+Multi ({'PS' if self.variant == 'ps' else 'noPS'})",
-            device="cpu",
+            device=device,
             runtime=time.perf_counter() - started,
             warnings=[
                 "Model velocities may be fixed rather than expressive estimates.",

@@ -109,6 +109,7 @@ baseline. Download the additional weights explicitly once:
 ```sh
 uv run brass-transcribe download-model --variant ps
 uv run brass-transcribe download-model --variant beats
+uv run brass-transcribe download-model --variant separation
 uv run brass-transcribe improve ./sunchyme-brassaranka \
   --output ./output-quality-sunchyme --passes 4
 ```
@@ -122,6 +123,17 @@ require agreement or harmonic-template audio evidence. Every retained/rejected
 hypothesis has a decision and its original observations saved for review.
 These passes share an architecture and are correlated; agreement is a heuristic,
 not independent proof of correctness.
+
+A second, independent listener targets quiet upper lines (for example clarinets
+above a brass tutti), which YourMT3 often misses in the full mix. Hybrid Demucs
+(torchaudio) removes the drum and bass stems, then Basic Pitch (Spotify, bundled
+ONNX model) transcribes the remainder. Only notes from F5 (MIDI 77) upward, of at
+least 0.15 s, are used. Weak notes overlapping a much louder note one octave below
+are discarded as likely overtones. Remaining listener-only notes are kept unless they
+duplicate a kept note of the same pitch; in this register they agree with YourMT3
+on about 77% of notes where both hear the line. Listener notes carry no instrument
+label, so parts are assigned by register. Use `--no-listener` to skip this pass.
+Its raw notes and separated audio are in `intermediate/variants/separated/`.
 
 Beat This! estimates beat/downbeat activations, and a madmom HMM decoder imposes
 metrical continuity using the configured meter. Notes are quantized against a
@@ -145,7 +157,8 @@ unassigned when the best two instrument choices have similar costs; its
 pitch and observations remain available for review. `--passes 2` skips the
 augmented inference passes.
 
-Additional downloads are approximately 724 MB (PS) and 78 MB (beat tracker).
+Additional downloads are approximately 724 MB (PS), 78 MB (beat tracker) and
+335 MB (Hybrid Demucs separation).
 An inference-only copy of PS removes eight training augmentation buffers;
 learned parameters are loaded strictly unchanged. Including that prepared copy,
 the local weight cache is about 2 GB. All inference remains local on CPU.
@@ -281,8 +294,8 @@ Install/start your Docker engine, then run from this directory:
 
 ```sh
 docker compose build
-# Explicit one-time download with SHA-256 verification (~1.34 GB downloaded,
-# ~1.9 GB of cache including the prepared inference checkpoint):
+# Explicit one-time download with SHA-256 verification (~1.67 GB downloaded,
+# ~2.2 GB of cache including the prepared inference checkpoint):
 docker compose --profile setup run --rm models
 docker compose up -d app
 ```
@@ -302,6 +315,26 @@ local MuseScore 4. MusicXML exports are included for interchange. Conversion is
 checked during the image build with a real 15-part score, including a check
 that no instrument imports as a choir. A job is only marked complete when its
 native `.mscz` exists. On a local macOS run, the installed MuseScore 4 is used.
+
+### NVIDIA GPU server
+
+On a Linux host with an NVIDIA GPU (driver 525 or newer) and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
+build with the CUDA 12.6 PyTorch wheels and reserve the GPU:
+
+```sh
+docker compose -f compose.yaml -f compose.gpu.yaml build
+docker compose -f compose.yaml -f compose.gpu.yaml --profile setup run --rm models
+BRASS_BIND=0.0.0.0 docker compose -f compose.yaml -f compose.gpu.yaml up -d app
+docker compose exec app python -c "import torch; print(torch.cuda.get_device_name())"
+```
+
+YourMT3, Hybrid Demucs and the beat tracker then run on CUDA automatically
+(`--device auto`); Basic Pitch stays on CPU. `--device cpu|cuda` on
+`transcribe` and `improve` overrides the choice. `BRASS_BIND=0.0.0.0` publishes
+the page to your local network. The page has no login, so do not forward the
+port to the internet. The CUDA image is x86_64 only and several GB larger than
+the CPU image; macOS and the default build keep CPU PyTorch.
 
 For a single image **including weights**, build the explicit `bundled` target:
 

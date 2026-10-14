@@ -26,7 +26,9 @@ def motif(phrase, rhythm: Rhythm | None):
     return intervals, iois
 
 
-def link_voices(phrases, rhythm: Rhythm | None, known_programs: set[int]) -> dict[int, VoiceLink]:
+def link_voices(
+    phrases, rhythm: Rhythm | None, known_programs: dict[int, int]
+) -> dict[int, VoiceLink]:
     order = sorted(
         range(len(phrases)),
         key=lambda i: (phrases[i].start, -np.mean([n.pitch for n in phrases[i].notes])),
@@ -37,7 +39,9 @@ def link_voices(phrases, rhythm: Rhythm | None, known_programs: set[int]) -> dic
     signatures = {i: motif(p, rhythm) for i, p in enumerate(phrases)}
     centers = {i: float(np.median([n.pitch for n in p.notes])) for i, p in enumerate(phrases)}
     programs = {
-        i: Counter(n.program for n in p.notes if n.program in known_programs).most_common(1)
+        i: Counter(
+            known_programs[n.program] for n in p.notes if n.program in known_programs
+        ).most_common(1)
         for i, p in enumerate(phrases)
     }
     for i in order:
