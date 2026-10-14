@@ -427,3 +427,32 @@ def test_variable_tempo_native_playback_preserves_pitches_and_onsets(tmp_path, p
     assert Counter((n.pitch, round(n.start, 2), round(n.end, 2)) for n in actual) == Counter(
         (n.pitch, round(n.start, 2), round(n.end, 2)) for n in expected
     )
+
+
+def test_augmented_views_are_mapped_back_to_original_time_and_pitch():
+    from brass_transcriber.quality import undo_augmentation
+
+    notes = [
+        NoteEvent(id="a", pitch=62, start=10 + 1.0, end=10 + 2.0),
+        NoteEvent(id="d", pitch=38, start=10 + 1.0, end=10 + 1.1, drum=True),
+    ]
+    restored = undo_augmentation(notes, shift=2, stretch=1.06, start=10)
+    assert restored[0].pitch == 60 and restored[1].pitch == 38
+    assert restored[0].start == pytest.approx(11.06) and restored[0].end == pytest.approx(12.12)
+    assert undo_augmentation(notes, 0, 1.0, 0) == notes
+
+
+def test_benchmark_configurations_and_scores():
+    from brass_transcriber.benchmark import configurations, merge_unisons, note_scores
+
+    configs = configurations(["ps", "baseline", "ps_up", "ps_down", "separated"])
+    assert ("1 passes", [], 2) in configs
+    assert ("4 passes", ["baseline", "ps_up", "ps_down"], 4) in configs
+    assert ("all without ps_up", ["baseline", "ps_down"], 2) in configs
+    reference = [(0.0, 0.5, 60), (0.02, 0.5, 60), (1.0, 1.5, 64)]
+    assert merge_unisons(reference) == [(0.0, 0.5, 60), (1.0, 1.5, 64)]
+    assert note_scores(merge_unisons(reference), [(0.03, 0.4, 60), (1.0, 1.5, 65)]) == (
+        0.5,
+        0.5,
+        0.5,
+    )

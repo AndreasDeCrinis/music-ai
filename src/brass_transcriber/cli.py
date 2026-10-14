@@ -445,7 +445,7 @@ def improve(
     source: Path,
     output: Path = typer.Option(Path("output-improved"), "--output"),
     ensemble: EnsemblePreset | None = None,
-    passes: int = typer.Option(4, min=2, max=4),
+    passes: int = typer.Option(4, min=2, max=9, help="Cached baseline + up to 8 PS views"),
     beam_size: int = typer.Option(64, min=4, max=256),
     cache: Path = CACHE,
     tempo: float | None = typer.Option(None, min=20, max=400),
@@ -486,6 +486,24 @@ def improve(
         )
     except (ValueError, RuntimeError, FileNotFoundError, Music21Exception) as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+@app.command()
+def benchmark(
+    run: Path,
+    reference: Path = typer.Argument(..., help="MIDI export of the score that was rendered"),
+    beam_size: int = typer.Option(64, min=4, max=256),
+):
+    """Compare pass combinations of a quality run against a reference score (no inference)."""
+    from .benchmark import benchmark_run, format_table
+
+    try:
+        report = benchmark_run(run, reference, beam_size)
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    (run / "diagnostics").mkdir(exist_ok=True)
+    (run / "diagnostics/benchmark.json").write_text(json.dumps(report, indent=2))
+    typer.echo(format_table(report))
 
 
 @app.command()
@@ -552,7 +570,16 @@ def diagnose(output: Path):
 
 def main():
     # Preserve requested bare-file interface while retaining diagnostic subcommands.
-    commands = {"transcribe", "diagnose", "doctor", "download-model", "resume", "improve", "refine"}
+    commands = {
+        "transcribe",
+        "diagnose",
+        "doctor",
+        "download-model",
+        "resume",
+        "improve",
+        "refine",
+        "benchmark",
+    }
     if len(sys.argv) > 1 and sys.argv[1] not in commands and not sys.argv[1].startswith("-"):
         sys.argv.insert(1, "transcribe")
     app()

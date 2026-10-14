@@ -19,6 +19,8 @@ OCTAVE_GHOST_SALIENCE = 0.2
 MIN_SALIENCE = 0.05
 SINGLE_PASS_MIN_SALIENCE = 0.2
 LISTENER_MIN_SALIENCE = 0.1
+# Distinct passes that must agree on a note the primary pass did not hear.
+MIN_AGREEMENT = 2
 
 
 @dataclass
@@ -48,6 +50,7 @@ def build_consensus(
     primary: str,
     evidence: PitchEvidence | None = None,
     trusted: frozenset[str] = frozenset(),
+    min_agreement: int | None = None,
 ) -> tuple[TranscriptionResult, list[NoteEvent], list[dict]]:
     """Select notes; alternate-only notes from `trusted` passes were already filtered."""
     groups = []
@@ -124,7 +127,7 @@ def build_consensus(
                     if weak
                     else "retained primary-model note"
                 )
-            keep = support >= 2 or (
+            keep = support >= (min_agreement or MIN_AGREEMENT) or (
                 salience is not None and salience >= 0.65 and end - start >= 0.12
             )
             return keep, (

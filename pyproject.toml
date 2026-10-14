@@ -27,6 +27,7 @@ dependencies = [
     "onnxruntime>=1.18",
     # resampy (a Basic Pitch dependency) still imports pkg_resources.
     "setuptools<81",
+    "mir-eval>=0.7",
 ]
 [project.optional-dependencies]
 # Linux images select a PyTorch build explicitly; macOS uses the default PyPI wheels.

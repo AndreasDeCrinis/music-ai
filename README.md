@@ -132,6 +132,30 @@ hypothesis has a decision and its original observations saved for review.
 These passes share an architecture and are correlated; agreement is a heuristic,
 not independent proof of correctness.
 
+`--passes` accepts up to 9 (CPU runtime grows roughly linearly; on a GPU each
+extra pass takes about a minute for a four-minute song). Beyond the semitone
+shifts, further views use ±2 semitones, 0.94×/1.06× tempo (timings are mapped
+back) and an unshifted pass with different chunk boundaries; the order is
+`PASS_SPECS` in `quality.py`. The web app keeps 2 or 4 passes. Notes the primary
+pass did not hear need `MIN_AGREEMENT` distinct passes (default 2).
+
+### Measuring pass counts
+
+`brass-transcribe benchmark RUN REFERENCE.mid` replays selection and part
+assignment of a finished quality run for nested pass sets, agreement levels and
+leave-one-out sets, and scores each against a reference score (pitch plus onset
+within 50 ms; unisons merged). It runs no inference and writes
+`diagnostics/benchmark.json`. A reference is easiest made by rendering a score:
+`mscore -o NAME.mp3 score.mscz` and `mscore -o NAME.mid score.mscz`. On the GPU
+server, put both files in `bench/` and run:
+
+```sh
+scripts/gpu-benchmark.sh NAME 9
+```
+
+Rendered references are synthetic: they show relative differences between
+configurations, not the accuracy to expect on a real band recording.
+
 A second, independent listener targets quiet upper lines (for example clarinets
 above a brass tutti), which YourMT3 often misses in the full mix. Hybrid Demucs
 (torchaudio) removes the drum and bass stems, then Basic Pitch (Spotify, bundled

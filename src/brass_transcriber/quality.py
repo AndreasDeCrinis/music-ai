@@ -19,6 +19,8 @@ from .models import (
     Assignment,
     EnsembleConfig,
     EnsemblePreset,
+    NoteEvent,
+    PartConfig,
     TranscriptionResult,
     load_ensemble,
     write_midi,
@@ -41,6 +43,55 @@ class QualityRun:
     summary: dict
 
 
+# (pass id, pitch shift in semitones, tempo stretch rate, chunk seconds, overlap seconds).
+# Differing views and chunk boundaries make pass errors less correlated; `--passes N`
+# uses the cached baseline plus the first N-1 entries.
+PASS_SPECS = [
+    ("ps", 0, 1.0, 45, 5),
+    ("ps_up", 1, 1.0, 33, 3),
+    ("ps_down", -1, 1.0, 39, 4),
+    ("ps_slow", 0, 0.94, 40, 4),
+    ("ps_fast", 0, 1.06, 38, 4),
+    ("ps_up2", 2, 1.0, 36, 4),
+    ("ps_down2", -2, 1.0, 42, 5),
+    ("ps_alt", 0, 1.0, 27, 4),
+]
+
+
+def undo_augmentation(notes: list[NoteEvent], shift: int, stretch: float, start: float):
+    """Map notes from a pitch-shifted/time-stretched view back to the original audio."""
+    restored = []
+    for n in notes:
+        update = {}
+        if stretch != 1:
+            update.update(
+                start=start + (n.start - start) * stretch, end=start + (n.end - start) * stretch
+            )
+        if shift and not n.drum:
+            if not 0 <= n.pitch - shift <= 127:
+                continue
+            update["pitch"] = n.pitch - shift
+        restored.append(n.model_copy(update=update) if update else n)
+    return restored
+
+
+def assign_selected(
+    selected: list[NoteEvent],
+    decisions: list[dict],
+    parts: list[PartConfig],
+    beam_size: int,
+    rhythm: Rhythm,
+) -> tuple[list[Assignment], dict]:
+    """Assign YourMT3-supported notes, then fill free parts with listener-dependent notes."""
+    dependent = {d["id"] for d in decisions if d["listener_dependent"]}
+    assignments, phrases = assign_phrases(
+        [n for n in selected if n.id not in dependent], parts, beam_size, rhythm=rhythm
+    )
+    assignments = place_unassigned(assignments, parts)
+    assignments = add_phrases(assignments, [n for n in selected if n.id in dependent], parts)
+    return assignments, phrases
+
+
 def improve_run(
     source: Path,
     output: Path,
@@ -58,8 +109,10 @@ def improve_run(
         )
     if output.exists() and any(output.iterdir()):
         raise ValueError("Improved output directory is not empty")
-    if passes not in {2, 3, 4}:
-        raise ValueError("Use 2, 3 or 4 passes (cached baseline + PS + optional pitch-shift views)")
+    if not 2 <= passes <= len(PASS_SPECS) + 1:
+        raise ValueError(
+            f"Use 2-{len(PASS_SPECS) + 1} passes (cached baseline + PS + augmented views)"
+        )
     source_intermediate = source / "intermediate"
     settings = json.loads((source_intermediate / "run_settings.json").read_text())
     baseline_path = source_intermediate / "model_notes.json"
@@ -111,20 +164,21 @@ def improve_run(
     evidence = analyze_evidence(audio, intermediate / "pitch_evidence.npz", start)
     results = {"baseline": baseline}
     y, sr = sf.read(audio, dtype="float32")
-    specifications = [("ps", 0, 45, 5), ("ps_up", 1, 33, 3), ("ps_down", -1, 39, 4)]
-    for pass_id, shift, chunk, overlap in specifications[: passes - 1]:
+    for pass_id, shift, stretch, chunk, overlap in PASS_SPECS[: passes - 1]:
         directory = variants / pass_id
         directory.mkdir()
-        log.info("Quality: transcription pass %s (pitch shift %+d)", pass_id, shift)
+        log.info(
+            "Quality: transcription pass %s (pitch shift %+d, tempo x%.2f)", pass_id, shift, stretch
+        )
         transformed = audio
-        if shift:
+        if shift or stretch != 1:
             transformed = directory / "input.wav"
-            sf.write(
-                transformed,
-                librosa.effects.pitch_shift(y, sr=sr, n_steps=shift).astype("float32"),
-                sr,
-                subtype="FLOAT",
-            )
+            view = y
+            if shift:
+                view = librosa.effects.pitch_shift(view, sr=sr, n_steps=shift)
+            if stretch != 1:
+                view = librosa.effects.time_stretch(view, rate=stretch)
+            sf.write(transformed, view.astype("float32"), sr, subtype="FLOAT")
         backend = YourMT3Backend(
             cache,
             directory / "model_chunks",
@@ -138,16 +192,17 @@ def improve_run(
         prediction = backend.transcribe(transformed)
         # Untouched raw MIDI remains in model_chunks. Normalized JSON records the
         # inverse augmentation so concert pitches can be compared between passes.
-        if shift:
-            prediction.notes = [
-                n.model_copy(update={"pitch": n.pitch - shift}) if not n.drum else n
-                for n in prediction.notes
-                if n.drum or 0 <= n.pitch - shift <= 127
-            ]
+        prediction.notes = undo_augmentation(prediction.notes, shift, stretch, start)
         (directory / "model_notes.json").write_text(prediction.model_dump_json(indent=2))
         (directory / "pass_settings.json").write_text(
             json.dumps(
-                dict(pitch_shift=shift, chunk_seconds=chunk, overlap_seconds=overlap), indent=2
+                dict(
+                    pitch_shift=shift,
+                    tempo_stretch=stretch,
+                    chunk_seconds=chunk,
+                    overlap_seconds=overlap,
+                ),
+                indent=2,
             )
         )
         results[pass_id] = prediction
@@ -171,14 +226,7 @@ def improve_run(
     write_midi(result.notes, intermediate / "raw_transcription.mid", rhythm.tempo)
     write_midi(selected, intermediate / "selected_transcription.mid", rhythm.tempo)
     log.info("Quality: track melodic voices and assign complete phrases")
-    dependent = {d["id"] for d in decisions if d["listener_dependent"]}
-    assignments, phrases = assign_phrases(
-        [n for n in selected if n.id not in dependent], ensemble.parts, beam_size, rhythm=rhythm
-    )
-    assignments = place_unassigned(assignments, ensemble.parts)
-    assignments = add_phrases(
-        assignments, [n for n in selected if n.id in dependent], ensemble.parts
-    )
+    assignments, phrases = assign_selected(selected, decisions, ensemble.parts, beam_size, rhythm)
     (intermediate / "phrases.json").write_text(json.dumps(phrases, indent=2))
     selected_ids = {n.id for n in selected}
     rejected = {d["id"]: d for d in decisions if d["action"] == "reject"}
