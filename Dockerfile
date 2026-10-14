@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 # cpu, or cu126 for NVIDIA GPUs (driver >= 525; CUDA libraries ship in the wheels).
 ARG TORCH_VARIANT=cpu
+# Plain copies: reflink/clone from the uv cache fails on some Docker storage drivers.
+ENV UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv sync --frozen --no-dev --extra ${TORCH_VARIANT} --python /usr/local/bin/python \
