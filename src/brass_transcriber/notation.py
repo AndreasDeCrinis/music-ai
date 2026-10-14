@@ -20,8 +20,8 @@ from music21 import (
     tempo,
 )
 
-from .models import Assignment, NoteEvent, PartConfig, write_midi
-from .rhythm import Rhythm, grid_quarters, quantize
+from .models import Assignment, PartConfig
+from .rhythm import Rhythm, grid_quarters, quantize, seconds_to_quarters, tempo_map
 
 
 def build_score(
@@ -30,6 +30,7 @@ def build_score(
     score = stream.Score()
     score.metadata = metadata.Metadata(title="Provisional brass band transcription")
     score.atSoundingPitch = False
+    score.editorial["rhythm"] = rhythm.model_dump()
     mapping = []
     bar_length = float(meter.TimeSignature(rhythm.time_signature).barDuration.quarterLength)
     padding = float(bar_length - rhythm.pickup) if rhythm.pickup else 0
@@ -41,8 +42,11 @@ def build_score(
         (quantize(a.note.start, a.note.end, rhythm)[1] for a in assignments if a.part),
         default=0,
     )
-    required_quarters = max(total_seconds * rhythm.tempo / 60, latest_note, 1) + padding
+    required_quarters = max(seconds_to_quarters(total_seconds, rhythm), latest_note, 1) + padding
     total_quarters = math.ceil(required_quarters / bar_length) * bar_length
+    pitched_parts = [p for p in parts if not p.percussion]
+    available_channels = [c for c in range(16) if c != 9]
+    programs = sorted({p.program for p in pitched_parts})
     for config in parts:
         part = stream.Part(id=config.id)
         part.partName = config.name
@@ -55,8 +59,15 @@ def build_score(
         )
         inst.partName = config.name
         inst.midiProgram = config.program
-        programs = sorted({p.program for p in parts})
-        inst.midiChannel = 9 if config.percussion else programs.index(config.program)
+        inst.midiChannel = (
+            9
+            if config.percussion
+            else available_channels[
+                pitched_parts.index(config)
+                if len(pitched_parts) <= 15
+                else programs.index(config.program)
+            ]
+        )
         inst.editorial["instrument_sound"] = config.instrument_sound
         inst.editorial["percussion"] = config.percussion
         inst.transposition = interval.Interval(config.written_to_sounding)
@@ -70,7 +81,11 @@ def build_score(
             else clef.TrebleClef(),
         )
         part.insert(0, meter.TimeSignature(rhythm.time_signature))
-        part.insert(0, tempo.MetronomeMark(number=rhythm.tempo))
+        for tempo_index, (position, bpm) in enumerate(tempo_map(rhythm)):
+            mark = tempo.MetronomeMark(number=bpm)
+            if tempo_index:
+                mark.style.hideObjectOnPrint = True
+            part.insert(position + (padding if position else 0), mark)
         ends = [0.0] * config.max_simultaneous
         voices = [stream.Voice(id=i + 1) for i in range(config.max_simultaneous)]
         selected = sorted(
@@ -189,6 +204,9 @@ def build_score(
                         container.setElementOffset(element, max(0, old_offset - padding))
             first.paddingLeft = padding
             first.number = 0
+            for mark in first.getElementsByClass(tempo.MetronomeMark):
+                if mark.offset >= padding:
+                    first.setElementOffset(mark, float(mark.offset) - padding)
             for measure in list(part.getElementsByClass(stream.Measure))[1:]:
                 part.setElementOffset(measure, float(measure.offset) - padding)
                 measure.number -= 1
@@ -273,6 +291,16 @@ def enrich_xml(path: Path, score: stream.Score) -> None:
     """Add instrument-sound metadata music21 omits and reuse GM program channels."""
     root = ET.parse(path).getroot()
     channels = {}
+    separate_desks = (
+        sum(
+            not next(
+                iter(p.recurse().getElementsByClass(instrument.Instrument)), p.getInstrument()
+            ).editorial.get("percussion", False)
+            for p in score.parts
+        )
+        <= 15
+    )
+    available_channels = [c for c in range(1, 17) if c != 10]
     for xml_part, part in zip(root.findall("part-list/score-part"), score.parts, strict=True):
         inst = next(
             iter(part.recurse().getElementsByClass(instrument.Instrument)), part.getInstrument()
@@ -291,9 +319,10 @@ def enrich_xml(path: Path, score: stream.Score) -> None:
                     channel.text = "10"
                 continue
             program = inst.midiProgram or 0
-            if program not in channels:
-                channels[program] = len(channels) + 1
-            midi.find("midi-channel").text = str(channels[program])
+            channel_key = part.id if separate_desks else program
+            if channel_key not in channels:
+                channels[channel_key] = available_channels[len(channels)]
+            midi.find("midi-channel").text = str(channels[channel_key])
     # Tie fragments copy the source ID; XML IDs must be unique document-wide.
     seen = {}
     for xml_note in root.findall(".//note"):
@@ -301,8 +330,61 @@ def enrich_xml(path: Path, score: stream.Score) -> None:
         if source_id:
             seen[source_id] = seen.get(source_id, 0) + 1
             xml_note.set("id", f"{source_id}-segment-{seen[source_id]}")
+    normalize_tempo_directions(root)
     ET.indent(root)
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def normalize_tempo_directions(root: ET.Element) -> None:
+    """Anchor tempo directions with explicit clock advances rather than offsets.
+
+    MuseScore loses some offset-based changes inside long rests. A sequence of
+    forward/direction elements followed by backup keeps all changes and leaves
+    the original notes, rests and voice clocks unchanged.
+    """
+    for part in root.findall("part"):
+        divisions = 10080
+        first = True
+        for measure in part.findall("measure"):
+            divisions = int(measure.findtext("attributes/divisions", str(divisions)))
+            cursor = 0
+            directions = []
+            for element in list(measure):
+                sound = element.find("sound")
+                if element.tag == "direction" and sound is not None and sound.get("tempo"):
+                    position = cursor + int(element.findtext("offset", "0"))
+                    offset = element.find("offset")
+                    if offset is not None:
+                        element.remove(offset)
+                    if not first:
+                        element.set("print-object", "no")
+                    first = False
+                    directions.append((position, element))
+                    measure.remove(element)
+                elif element.tag in {"note", "forward"} and element.find("chord") is None:
+                    cursor += int(element.findtext("duration", "0"))
+                elif element.tag == "backup":
+                    cursor -= int(element.findtext("duration", "0"))
+            insertion = next(
+                (i for i, e in enumerate(measure) if e.tag not in {"attributes", "print"}),
+                len(measure),
+            )
+            previous = 0
+            for position, direction in sorted(directions, key=lambda item: item[0]):
+                if position < 0:
+                    raise ValueError("Tempo direction precedes its measure")
+                if position > previous:
+                    forward = ET.Element("forward")
+                    ET.SubElement(forward, "duration").text = str(position - previous)
+                    measure.insert(insertion, forward)
+                    insertion += 1
+                measure.insert(insertion, direction)
+                insertion += 1
+                previous = position
+            if previous:
+                backup = ET.Element("backup")
+                ET.SubElement(backup, "duration").text = str(previous)
+                measure.insert(insertion, backup)
 
 
 def enrich_percussion(xml_part: ET.Element, xml_music: ET.Element, part: stream.Part) -> None:
@@ -344,69 +426,112 @@ def enrich_percussion(xml_part: ET.Element, xml_music: ET.Element, part: stream.
 
 
 def write_score_midi(score: stream.Score, path: Path) -> None:
-    """Export concert pitches directly, merging tie segments without music21's
-    multi-voice MIDI tie-onset drift. Same-program desks share a GM channel in independent tracks.
+    """Write quarter-note ticks directly, with a faithful variable-tempo map.
+
+    Merge tie fragments without onset drift; keep independent desks and GM drums.
     """
+    import mido
+
     sounding = score.toSoundingPitch()
     marks = list(score.recurse().getElementsByClass(tempo.MetronomeMark))
     bpm = float(marks[0].number) if marks else 120
-    events = []
-    for part_index, part in enumerate(sounding.parts):
-        inst = next(
-            iter(part.recurse().getElementsByClass(instrument.Instrument)), part.getInstrument()
+    rhythm_data = score.editorial.get("rhythm")
+    rhythm = (
+        Rhythm.model_validate(rhythm_data)
+        if rhythm_data
+        else Rhythm(tempo=bpm, detected_tempo=None, beats=[])
+    )
+    ticks = 960
+    midi = mido.MidiFile(ticks_per_beat=ticks)
+    conductor = mido.MidiTrack()
+    midi.tracks.append(conductor)
+    signature = rhythm.time_signature.split("/")
+    conductor.append(
+        mido.MetaMessage(
+            "time_signature", numerator=int(signature[0]), denominator=int(signature[1]), time=0
         )
+    )
+    previous_tick = 0
+    for quarter, local_bpm in tempo_map(rhythm):
+        tick = max(0, round(quarter * ticks))
+        conductor.append(
+            mido.MetaMessage(
+                "set_tempo", tempo=mido.bpm2tempo(local_bpm), time=tick - previous_tick
+            )
+        )
+        previous_tick = tick
+    # getInstrument does not always recurse into the first measure.
+    instruments = [
+        next(iter(p.recurse().getElementsByClass(instrument.Instrument)), p.getInstrument())
+        for p in sounding.parts
+    ]
+    programs = sorted(
+        {i.midiProgram or 0 for i in instruments if not i.editorial.get("percussion", False)}
+    )
+    channels = [c for c in range(16) if c != 9]
+    if len(programs) > len(channels):
+        raise ValueError("Too many distinct GM programs for a single-port MIDI file")
+    pitched_indices = [
+        i for i, inst in enumerate(instruments) if not inst.editorial.get("percussion", False)
+    ]
+    for part_index, (part, inst) in enumerate(zip(sounding.parts, instruments, strict=True)):
         program = inst.midiProgram or 0
+        drum_part = bool(inst.editorial.get("percussion", False))
+        channel = (
+            9
+            if drum_part
+            else channels[
+                pitched_indices.index(part_index)
+                if len(pitched_indices) <= 15
+                else programs.index(program)
+            ]
+        )
+        notes = []
         active = {}
         for event in sorted(part.recurse().notes, key=lambda n: n.getOffsetInHierarchy(part)):
-            onset = float(event.getOffsetInHierarchy(part)) * 60 / bpm
-            offset = onset + float(event.quarterLength) * 60 / bpm
+            onset = float(event.getOffsetInHierarchy(part))
+            offset = onset + float(event.quarterLength)
             components = event.notes if isinstance(event, chord.ChordBase) else [event]
             for n in components:
                 is_drum = isinstance(n, note.Unpitched)
                 pitch_number = n.storedInstrument.percMapPitch if is_drum else n.pitch.midi
                 key = (str(n.id), pitch_number)
                 if n.tie and n.tie.type in {"continue", "stop"} and key in active:
-                    active[key].end = offset
+                    active[key]["end"] = offset
                     continue
-                ev = NoteEvent(
-                    id=f"score-{part_index}-{n.id}",
-                    pitch=pitch_number,
-                    start=onset,
-                    end=offset,
-                    velocity=n.volume.velocity or 80,
-                    program=program,
-                    track=part_index,
-                    drum=is_drum,
+                item = dict(
+                    pitch=pitch_number, start=onset, end=offset, velocity=n.volume.velocity or 80
                 )
-                events.append(ev)
-                active[key] = ev
-    write_midi(events, path, bpm)
-    # GM has 15 pitched channels but 17 score desks. Reuse channels only among
-    # equal programs, keeping separate MIDI tracks (and unison note identities).
-    import mido
-
-    midi = mido.MidiFile(path)
-    signatures = list(score.recurse().getElementsByClass(meter.TimeSignature))
-    if signatures:
-        signature = signatures[0]
-        midi.tracks[0].insert(
-            0,
+                notes.append(item)
+                active[key] = item
+        track = mido.MidiTrack()
+        midi.tracks.append(track)
+        track.append(
             mido.MetaMessage(
-                "time_signature",
-                numerator=signature.numerator,
-                denominator=signature.denominator,
+                "track_name",
+                name=(part.partName or inst.instrumentName or "Part")
+                .replace("♭", "b")
+                .replace("♯", "#")
+                .encode("latin-1", "replace")
+                .decode("latin-1"),
                 time=0,
-            ),
+            )
         )
-    programs = sorted({event.program for event in events})
-    channels = [c for c in range(16) if c != 9]
-    for track in midi.tracks:
-        if any(hasattr(m, "channel") and m.channel == 9 for m in track):
-            continue
-        program = next((m.program for m in track if m.type == "program_change"), None)
-        if program is not None:
-            channel = channels[programs.index(program)]
-            for message in track:
-                if hasattr(message, "channel"):
-                    message.channel = channel
+        track.append(mido.Message("program_change", channel=channel, program=program, time=0))
+        events = []
+        for item in notes:
+            events.append((round(item["start"] * ticks), 1, item["pitch"], item["velocity"]))
+            events.append((round(item["end"] * ticks), 0, item["pitch"], 0))
+        previous_tick = 0
+        for tick, on, pitch_number, velocity in sorted(events):
+            track.append(
+                mido.Message(
+                    "note_on" if on else "note_off",
+                    channel=channel,
+                    note=pitch_number,
+                    velocity=velocity,
+                    time=max(0, tick - previous_tick),
+                )
+            )
+            previous_tick = tick
     midi.save(path)

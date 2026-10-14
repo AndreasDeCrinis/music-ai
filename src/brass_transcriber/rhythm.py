@@ -4,7 +4,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 import soundfile as sf
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class Rhythm(BaseModel):
@@ -14,7 +14,27 @@ class Rhythm(BaseModel):
     time_signature: str = "4/4"
     grid: str = "1/16"
     pickup: float = 0
-    warnings: list[str] = []
+    warnings: list[str] = Field(default_factory=list)
+    mode: str = "constant"
+    downbeats: list[float] = Field(default_factory=list)
+    grid_times: list[float] = Field(default_factory=list)
+    grid_positions: list[float] = Field(default_factory=list)
+    tracker: str = "librosa"
+    tracker_device: str = "cpu"
+    tracker_runtime: float = 0
+
+    @model_validator(mode="after")
+    def validate_map(self):
+        if self.mode == "beats":
+            if len(self.grid_times) != len(self.grid_positions) or len(self.grid_times) < 2:
+                raise ValueError("Beat timing requires matching time/position arrays")
+            if any(b <= a for a, b in zip(self.grid_times, self.grid_times[1:])) or any(
+                b <= a for a, b in zip(self.grid_positions, self.grid_positions[1:])
+            ):
+                raise ValueError("Beat timing anchors must be strictly increasing")
+        elif self.mode != "constant":
+            raise ValueError("Timing mode must be constant or beats")
+        return self
 
 
 def grid_quarters(grid: str) -> float:
@@ -60,6 +80,43 @@ def analyze(
 
 def quantize(start: float, end: float, rhythm: Rhythm) -> tuple[float, float]:
     step = grid_quarters(rhythm.grid)
-    onset = round(start * rhythm.tempo / 60 / step) * step
-    offset = round(end * rhythm.tempo / 60 / step) * step
+    onset = max(0, round(seconds_to_quarters(start, rhythm) / step) * step)
+    offset = round(seconds_to_quarters(end, rhythm) / step) * step
     return onset, max(onset + step, offset)
+
+
+def interpolate(value: float, x: list[float], y: list[float]) -> float:
+    if value < x[0]:
+        index = 0
+    elif value > x[-1]:
+        index = len(x) - 2
+    else:
+        return float(np.interp(value, x, y))
+    return y[index] + (value - x[index]) * (y[index + 1] - y[index]) / (x[index + 1] - x[index])
+
+
+def seconds_to_quarters(seconds: float, rhythm: Rhythm) -> float:
+    if rhythm.mode == "beats":
+        return interpolate(seconds, rhythm.grid_times, rhythm.grid_positions)
+    return seconds * rhythm.tempo / 60
+
+
+def quarters_to_seconds(quarters: float, rhythm: Rhythm) -> float:
+    if rhythm.mode == "beats":
+        return interpolate(quarters, rhythm.grid_positions, rhythm.grid_times)
+    return quarters * 60 / rhythm.tempo
+
+
+def tempo_map(rhythm: Rhythm) -> list[tuple[float, float]]:
+    if rhythm.mode != "beats":
+        return [(0, rhythm.tempo)]
+    result = []
+    for i in range(len(rhythm.grid_times) - 1):
+        bpm = (
+            60
+            * (rhythm.grid_positions[i + 1] - rhythm.grid_positions[i])
+            / (rhythm.grid_times[i + 1] - rhythm.grid_times[i])
+        )
+        if not result or abs(bpm - result[-1][1]) > 0.05:
+            result.append((rhythm.grid_positions[i], bpm))
+    return result

@@ -3,7 +3,21 @@ name = "brass-transcriber"
 version = "0.1.0"
 description = "Local YourMT3+ transcription and provisional British brass band scoring"
 requires-python = ">=3.11,<3.13"
-dependencies = ["typer>=0.12", "pydantic>=2", "pyyaml>=6", "pretty-midi>=0.2.10", "music21>=9", "librosa>=0.10", "soundfile>=0.13", "matplotlib>=3.8", "imageio-ffmpeg>=0.6", "mt3-infer @ git+https://github.com/openmirlab/mt3-infer.git@d8cbd287470291dee335f84315c5a9b9ff6e6c8a", "transformers==4.43.4"]
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2",
+    "pyyaml>=6",
+    "pretty-midi>=0.2.10",
+    "music21>=9",
+    "librosa>=0.10",
+    "soundfile>=0.13",
+    "matplotlib>=3.8",
+    "imageio-ffmpeg>=0.6",
+    "mt3-infer @ git+https://github.com/openmirlab/mt3-infer.git@d8cbd287470291dee335f84315c5a9b9ff6e6c8a",
+    "transformers==4.43.4",
+    "beat-this==1.1.0",
+    "madmom",
+]
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.9"]
 [project.scripts]
@@ -20,5 +34,8 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E501"]
+
+[tool.uv.sources]
+madmom = { git = "https://github.com/CPJKU/madmom.git", rev = "27f032e8947204902c675e5e341a3faf5dc86dae" }
 [tool.hatch.metadata]
 allow-direct-references = true

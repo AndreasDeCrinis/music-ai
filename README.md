@@ -100,7 +100,74 @@ uv run brass-transcribe input.wav --from-midi previous.mid --output output-reuse
 
 This is an explicit debug/reorchestration path, not model inference. No synthetic backend is exposed as a substitute for the pretrained model. Source separation is reserved behind `--separate`, which currently raises an informative error; conventional stems do not isolate brass desks.
 
-## Outputs
+## Precision pipeline
+
+Use `improve` on a saved run to spend more local computation on transcription,
+timing and phrase assignment. It creates a separate output and preserves the
+baseline. Download the additional weights explicitly once:
+
+```sh
+uv run brass-transcribe download-model --variant ps
+uv run brass-transcribe download-model --variant beats
+uv run brass-transcribe improve ./sunchyme-brassaranka \
+  --output ./output-quality-sunchyme --passes 4
+```
+
+This uses the alternate YourMT3+ pitch-shift-trained MoE checkpoint, then two
+additional passes on audio shifted up/down one semitone with different chunk
+boundaries. Detected pitches are shifted back before comparison. The unshifted
+PS pass anchors selection: augmentations can miss valid notes, so absence in
+those passes does not by itself reject a primary note. Alternate-only additions
+require agreement or harmonic-template audio evidence. Every retained/rejected
+hypothesis has a decision and its original observations saved for review.
+These passes share an architecture and are correlated; agreement is a heuristic,
+not independent proof of correctness.
+
+Beat This! estimates beat/downbeat activations, and a madmom HMM decoder imposes
+metrical continuity using the configured meter. Notes are quantized against a
+piecewise tempo map; hidden tempo changes preserve this timing in MusicXML,
+MIDI and MuseScore playback. Explicit MusicXML forward/backup anchors prevent
+MuseScore from dropping tempo changes inside long rests. Ensembles with at most
+15 pitched parts get separate MIDI channels per desk, retaining overlapping
+unisons independently. The first bar's lead-in and any pickup still need
+review. `--tempo` deliberately selects constant-tempo timing instead.
+Monophonic voice tracking and whole-phrase part assignment reduce isolated
+notes switching desks. They cannot identify the original player from a mixed
+recording. A short isolated fragment supported by only one pass remains
+unassigned when the best two instrument choices have similar costs; its
+pitch and observations remain available for review. `--passes 2` skips the
+augmented inference passes.
+
+Additional downloads are approximately 724 MB (PS) and 78 MB (beat tracker).
+An inference-only copy of PS removes eight training augmentation buffers;
+learned parameters are loaded strictly unchanged. Including that prepared copy,
+the local weight cache is about 2 GB. All inference remains local on CPU.
+
+Quality runs additionally contain `intermediate/variants/` (raw model MIDI and
+normalized notes per pass), `quality_notes.json` (selected hypotheses),
+`quality_decisions.json`, `pitch_evidence.npz`, `timing/`, `phrases.json`, and
+`diagnostics/quality_report.json`. `diagnostics/opening_comparison.png` shows
+the opening assignments and highlights the original second-bar audio window.
+Root `model_notes.json` and
+`raw_transcription.mid` retain the unfiltered combined hypotheses. Original
+baseline files are copied into `intermediate/baseline/` and remain unchanged
+in the source run. `resume` preserves quality selection, timing and metadata;
+an explicit new ensemble reassigns selected notes only.
+
+The alternate checkpoint's SHA-256 is
+`7427055b51c3c8c86f6a35493cf0741d8db29186052055b59193590a82e6ec01`,
+from the author's [YourMT3 Space](https://huggingface.co/spaces/mimbres/YourMT3/tree/main/amt/logs/2024/mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2/checkpoints).
+[Beat This!](https://github.com/CPJKU/beat_this) code and weights are MIT licensed;
+the final0 checkpoint hash is
+`8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331`.
+The pinned [madmom fork](https://github.com/CPJKU/madmom/tree/27f032e8947204902c675e5e341a3faf5dc86dae)
+provides the BSD HMM decoder; its bundled pretrained models are not used.
+
+Structural comparisons in the quality report measure fragmentation and timing,
+not actual note accuracy. A reference score or annotated passage is needed to
+measure pitch precision and to tune instrument assignment reliably.
+
+## Output files
 
 - `full_score.musicxml`: the selected ensemble's named instrumental parts, written pitches and MusicXML transposition metadata.
 - `full_score.mid`: concert-pitch, quantized score MIDI (unquantized model MIDI in `--midi-only` mode).
@@ -150,4 +217,4 @@ The included sample is an excerpt of MT3-Infer's `assets/Chill_Guitar_loop_BANDL
 
 Phrase assignment uses beam search over chronological note events. Costs consider model programs, ranges/register, melodic leaps, duration continuity, simultaneous-note capacity and voice crossing. It retains unassigned notes when constraints exclude all plausible parts. Confidence measures heuristic alternative separation, not calibrated reconstruction probability. Scores are prominently labeled provisional.
 
-Highest-priority improvements: evaluate annotated brass-band recordings; calibrate assignment confidence and stronger phrase/harmony constraints; add beat-aligned variable-tempo quantization; improve long-note chunk stitching; add percussion notation and richer MuseScore instrument templates. Fixed-tempo grids cannot faithfully preserve rubato. Sustained-note stitching is heuristic, and quantization can alter durations or create extra notation voices at collapsed attacks. XML validity is not a claim of transcription accuracy.
+Further improvements need annotated brass-band recordings, calibrated assignment confidence, stronger harmony constraints and better sustained-note chunk stitching. The standard transcription path uses a fixed-tempo grid; `improve` adds beat-aligned variable tempo and phrase tracking. Sustained-note stitching is heuristic, and quantization can alter durations or create extra notation voices at collapsed attacks. XML validity is not a claim of transcription accuracy.

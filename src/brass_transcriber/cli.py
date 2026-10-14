@@ -13,12 +13,13 @@ import typer
 from music21.exceptions21 import Music21Exception
 
 from .audio import preprocess
-from .backend import CHECKPOINT_NAME, YourMT3Backend
+from .backend import CHECKPOINT_NAME, PS_CHECKPOINT_NAME, PS_SHA256, YourMT3Backend
 from .diagnostics import piano_roll, report
 from .models import (
     Assignment,
     EnsembleConfig,
     EnsemblePreset,
+    NoteEvent,
     PartConfig,
     TranscriptionResult,
     load_ensemble,
@@ -28,7 +29,7 @@ from .models import (
 )
 from .notation import build_score, export_score, musescore_export
 from .orchestration import assign_voices
-from .rhythm import Rhythm, analyze
+from .rhythm import Rhythm, analyze, quarters_to_seconds
 
 app = typer.Typer(
     no_args_is_help=True, help="Local YourMT3+ to provisional brass/wind ensemble score"
@@ -38,21 +39,33 @@ SHA256 = "ae38e415c79efd5592dcb9b658cdb99ddb11d4c4e1eaa364cab04a052473fc25"
 
 
 @app.command()
-def download_model(cache: Path = CACHE):
-    """Explicitly download and verify the ~536 MB YourMT3+ checkpoint."""
+def download_model(cache: Path = CACHE, variant: str = "nops"):
+    """Download and verify nops, ps, or beats weights explicitly."""
     target = cache / "yourmt3" / CHECKPOINT_NAME / "last.ckpt"
-    target.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://huggingface.co/spaces/mimbres/YourMT3/resolve/main/amt/logs/2024/{CHECKPOINT_NAME}/checkpoints/last.ckpt"
+    expected, size = SHA256, "536 MB"
+    if variant == "ps":
+        target = cache / "yourmt3" / PS_CHECKPOINT_NAME / "model.ckpt"
+        url = f"https://huggingface.co/spaces/mimbres/YourMT3/resolve/main/amt/logs/2024/{PS_CHECKPOINT_NAME}/checkpoints/model.ckpt"
+        expected, size = PS_SHA256, "724 MB"
+    elif variant == "beats":
+        target = cache / "beat_this/final0.ckpt"
+        url = "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt"
+        expected = "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331"
+        size = "78 MB"
+    elif variant != "nops":
+        raise typer.BadParameter("Variant must be nops, ps or beats")
+    target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(".partial")
     if not target.exists():
-        typer.echo("Downloading ~536 MB checkpoint locally; audio is never uploaded.")
+        typer.echo(f"Downloading ~{size} checkpoint locally; audio is never uploaded.")
         urllib.request.urlretrieve(url, partial)
         check = partial
     else:
         check = target
     with check.open("rb") as handle:
         digest = hashlib.file_digest(handle, "sha256").hexdigest()
-    if digest != SHA256:
+    if digest != expected:
         raise typer.BadParameter(f"Checkpoint checksum mismatch: {digest}")
     if check == partial:
         partial.replace(target)
@@ -257,6 +270,7 @@ def resume(
         settings_path = intermediate / "run_settings.json"
         warnings = ["Score regenerated from cached model notes; inference was not repeated."]
         selected_ensemble = None
+        settings = {}
         if settings_path.exists():
             settings = json.loads(settings_path.read_text())
             original_rhythm = Rhythm.model_validate(settings["rhythm"])
@@ -287,7 +301,20 @@ def resume(
         if selected_ensemble:
             warnings.extend(selected_ensemble.assumptions)
         excerpt_start = original_start if start is None else start
-        if any(value is not None for value in (tempo, time_signature, quantize, pickup, start)):
+        if original_rhythm.mode == "beats" and all(
+            value is None for value in (tempo, time_signature, start)
+        ):
+            updated_rhythm = original_rhythm.model_dump()
+            updated_rhythm["grid"] = quantize or original_rhythm.grid
+            updated_rhythm["pickup"] = original_rhythm.pickup if pickup is None else pickup
+            from .rhythm import grid_quarters
+
+            grid_quarters(updated_rhythm["grid"])
+            numerator, denominator = map(int, original_rhythm.time_signature.split("/"))
+            if not 0 <= updated_rhythm["pickup"] < numerator * 4 / denominator:
+                raise ValueError("Pickup must be shorter than a bar")
+            rhythm = Rhythm.model_validate(updated_rhythm)
+        elif any(value is not None for value in (tempo, time_signature, quantize, pickup, start)):
             rhythm = analyze(
                 audio,
                 original_rhythm.tempo if tempo is None else tempo,
@@ -307,7 +334,24 @@ def resume(
         reassign = ensemble is not None or previous_part_ids != {p.id for p in parts}
         assignment_changed = reassign or (not assignments and bool(result.notes))
         if assignment_changed:
-            assignments = assign_voices(result.notes, parts)
+            effective_path = intermediate / "quality_notes.json"
+            if effective_path.exists():
+                from .phrases import assign_phrases
+
+                effective = [
+                    NoteEvent.model_validate(n) for n in json.loads(effective_path.read_text())
+                ]
+                assignments, _ = assign_phrases(effective, parts)
+                retained = {n.id for n in effective}
+                assignments.extend(
+                    Assignment(
+                        note=n, part=None, confidence=0, reason="cached quality rejection preserved"
+                    )
+                    for n in result.notes
+                    if n.id not in retained
+                )
+            else:
+                assignments = assign_voices(result.notes, parts)
             warnings.append(
                 "Cached source notes reassigned to the selected ensemble; source pitches and timings unchanged."
             )
@@ -321,9 +365,54 @@ def resume(
         if assignment_changed or not assigned_path.exists():
             assigned_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
         save_run_settings(output, rhythm, length, excerpt_start, parts, selected_ensemble)
+        if settings.get("quality"):
+            settings_path = output / "intermediate/run_settings.json"
+            updated = json.loads(settings_path.read_text())
+            updated["quality"] = settings["quality"]
+            settings_path.write_text(json.dumps(updated, indent=2))
         (output / "diagnostics").mkdir(exist_ok=True)
         finish_run(
             result, assignments, parts, rhythm, length, excerpt_start, output, False, mscz, warnings
+        )
+    except (ValueError, RuntimeError, FileNotFoundError, Music21Exception) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@app.command()
+def improve(
+    source: Path,
+    output: Path = typer.Option(Path("output-improved"), "--output"),
+    ensemble: EnsemblePreset | None = None,
+    passes: int = typer.Option(4, min=2, max=4),
+    beam_size: int = typer.Option(64, min=4, max=256),
+    cache: Path = CACHE,
+    tempo: float | None = typer.Option(None, min=20, max=400),
+    mscz: bool = typer.Option(True, "--mscz/--no-mscz"),
+):
+    """Run slower local multi-pass transcription, neural timing and phrase assignment."""
+    from .quality import improve_run
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    try:
+        run = improve_run(source, output, cache, ensemble, passes, beam_size, tempo)
+        save_run_settings(
+            output, run.rhythm, run.duration, run.start, run.ensemble.parts, run.ensemble
+        )
+        settings_path = output / "intermediate/run_settings.json"
+        settings = json.loads(settings_path.read_text())
+        settings["quality"] = run.summary
+        settings_path.write_text(json.dumps(settings, indent=2))
+        finish_run(
+            run.result,
+            run.assignments,
+            run.ensemble.parts,
+            run.rhythm,
+            run.duration,
+            run.start,
+            output,
+            False,
+            mscz,
+            run.ensemble.assumptions + run.summary["limitations"],
         )
     except (ValueError, RuntimeError, FileNotFoundError, Music21Exception) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -374,10 +463,15 @@ def diagnose(output: Path):
             data["comparison"]["assigned_pitch_histogram"]
             == data["comparison"]["score_pitch_histogram"]
         )
-        bpm = data["rhythm"]["tempo"]
         original = {a.note.id: a.note for a in assigned}
         data["comparison"]["max_onset_quantization_shift_seconds"] = max(
-            (abs(m["onset_quarters"] * 60 / bpm - original[m["source_id"]].start) for m in mapped),
+            (
+                abs(
+                    quarters_to_seconds(m["onset_quarters"], Rhythm.model_validate(data["rhythm"]))
+                    - original[m["source_id"]].start
+                )
+                for m in mapped
+            ),
             default=0,
         )
         data["comparison"]["quantization_adjustments"] = [
@@ -388,7 +482,7 @@ def diagnose(output: Path):
 
 def main():
     # Preserve requested bare-file interface while retaining diagnostic subcommands.
-    commands = {"transcribe", "diagnose", "doctor", "download-model", "resume"}
+    commands = {"transcribe", "diagnose", "doctor", "download-model", "resume", "improve"}
     if len(sys.argv) > 1 and sys.argv[1] not in commands and not sys.argv[1].startswith("-"):
         sys.argv.insert(1, "transcribe")
     app()
