@@ -1,5 +1,5 @@
 # NVIDIA GPU override (requires the NVIDIA Container Toolkit on the host):
-#   BRASS_BIND=0.0.0.0 docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
+#   BRASS_BIND=0.0.0.0 BRASS_PORT=8000 docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
 x-gpu-build: &gpu-build
   context: .
   target: app

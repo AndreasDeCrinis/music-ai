@@ -6,7 +6,7 @@ services:
       target: app
     init: true
     ports:
-      - "${BRASS_BIND:-127.0.0.1}:8000:8000"
+      - "${BRASS_BIND:-127.0.0.1}:${BRASS_PORT:-8000}:8000"
     volumes:
       - jobs:/data
       - models:/models
