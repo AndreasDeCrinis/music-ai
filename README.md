@@ -264,3 +264,103 @@ The included sample is an excerpt of MT3-Infer's `assets/Chill_Guitar_loop_BANDL
 Phrase assignment uses beam search over chronological note events. Costs consider model programs, ranges/register, melodic leaps, duration continuity, simultaneous-note capacity and voice crossing. It retains unassigned notes when constraints exclude all plausible parts. Confidence measures heuristic alternative separation, not calibrated reconstruction probability. Scores are prominently labeled provisional.
 
 Further improvements need annotated brass-band recordings, calibrated assignment confidence, stronger harmony constraints and better sustained-note chunk stitching. The standard transcription path uses a fixed-tempo grid; `improve` adds beat-aligned variable tempo and phrase tracking. Sustained-note stitching is heuristic, and quantization can alter durations or create extra notation voices at collapsed attacks. XML validity is not a claim of transcription accuracy.
+
+## Docker web application
+
+Brass Studio serves an MP3 upload page, persistent job history, processing logs,
+and downloads of the native MuseScore score (`.mscz`), MusicXML, MIDI and a ZIP
+containing the score and all individual MusicXML parts. Brassaranka is the web
+default; the British brass band preset is also selectable. Detailed mode uses
+four inference passes. Balanced mode uses two; both use neural beat tracking,
+shared integer tempo sections, persistent phrase assignment and joint rhythm
+fitting. Existing CLI workflows remain available.
+
+### Start with Docker Compose
+
+Install/start your Docker engine, then run from this directory:
+
+```sh
+docker compose build
+# Explicit one-time download with SHA-256 verification (~1.34 GB downloaded,
+# ~1.9 GB of cache including the prepared inference checkpoint):
+docker compose --profile setup run --rm models
+docker compose up -d app
+```
+
+Open **http://localhost:8000**. Once setup finishes, transcription runs offline.
+The image includes Python, CPU PyTorch, FFmpeg, the models' inference code,
+beat tracking and a headless MuseScore exporter. Model weights are kept in a
+persistent `models` volume; uploaded audio, job records and results are in the
+`jobs` volume. Rebuilding the app does not erase either volume. You can delete
+completed/failed recordings and their generated files from the page. Avoid
+`docker compose down -v` unless you intend to delete **all** jobs and weights.
+
+The standard image uses Debian's [MuseScore 3 package](https://packages.debian.org/bookworm/musescore3)
+for native export on both ARM64 and AMD64. It produces MuseScore 3-format `.mscz`
+files that MuseScore 4 can import; container engraving/playback may differ from
+local MuseScore 4. MusicXML exports are included for interchange. Conversion is
+checked during the image build with a real 15-part score, including a check
+that no instrument imports as a choir. A job is only marked complete when its
+native `.mscz` exists. On a local macOS run, the installed MuseScore 4 is used.
+
+For a single image **including weights**, build the explicit `bundled` target:
+
+```sh
+docker build --target bundled -t brass-studio:bundled .
+docker run --init --rm -p 127.0.0.1:8000:8000 \
+  -v brass-studio-jobs:/data brass-studio:bundled
+```
+
+This target downloads and verifies the checkpoints while building. Do not mount
+an empty directory over `/models` in that image, since it would hide the bundled
+weights. Review the upstream checkpoint redistribution terms described in
+“Backend investigation and licenses” before distributing a bundled image.
+The image preserves Debian's MuseScore copyright notices under
+`/usr/share/doc/musescore3`; its corresponding source package is linked on the
+Debian package page. A commercial release needs its dependency and weight
+redistribution licenses checked; this packaging does not establish permission
+for every upstream component.
+
+### Resources and configuration
+
+Allow Docker at least **8 CPU cores and 16 GB RAM** for the detailed pipeline;
+24 GB is preferable. This is CPU inference; Docker on macOS does not use Apple
+MPS. Processing time depends on recording length and hardware and can be tens
+of minutes. One worker runs one job at a time to avoid loading several large
+models concurrently. Pending jobs persist; jobs interrupted by a server restart
+are marked failed with retained intermediates and can be uploaded again.
+Run **one** web process per data directory; an exclusive worker lock rejects
+another process using the same directory.
+
+Compose binds to localhost. This version is a single-user local product with
+no account system: everyone who can access its server can view and delete its
+jobs. Before exposing it publicly, add authentication, TLS and per-user job
+ownership/storage quotas. Do not publish the port directly to the internet.
+
+Environment variables (also editable in `compose.yaml`):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BRASS_DATA` | `web-data` locally, `/data` in Docker | Persistent job storage |
+| `BRASS_CACHE` | `.cache/models` locally, `/models` in Docker | Weight cache |
+| `BRASS_MAX_UPLOAD_MB` | `100` | Maximum MP3 size; whole request bodies are bounded |
+| `BRASS_MAX_DURATION` | `900` | Maximum decoded audio length in seconds |
+| `BRASS_MAX_JOBS` | `20` | Maximum stored jobs; delete old jobs when full |
+| `BRASS_JOB_TIMEOUT` | `7200` | Maximum seconds for each pipeline stage |
+| `BRASS_HOST` | `127.0.0.1` locally, `0.0.0.0` in Docker | Listen address |
+| `PORT` | `8000` | HTTP port |
+| `MUSESCORE_BIN` | Auto-discovery | Optional native export executable |
+| `MUSESCORE_MAJOR` | `4` | Set `3` for a MuseScore 3 exporter |
+
+Local development with the existing weight cache:
+
+```sh
+uv sync --python 3.11
+uv run brass-web
+```
+
+Endpoints are documented at `/docs`: `POST /api/jobs` accepts multipart `file`,
+`ensemble` and `passes` (2 or 4); `GET /api/jobs/{id}` exposes job status and
+finished artifact names. `/api/health` distinguishes a running server from
+model readiness. Scores remain provisional transcriptions; use the included
+report and source recording when reviewing musical accuracy.

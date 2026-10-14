@@ -1,5 +1,6 @@
 import copy
 import math
+import os
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
@@ -283,18 +284,28 @@ def export_score(score: stream.Score, output: Path) -> None:
 
 
 def musescore_export(output: Path) -> str | None:
-    binary = shutil.which("mscore") or shutil.which("musescore")
+    binary = os.getenv("MUSESCORE_BIN") or next(
+        (
+            path
+            for name in ("mscore", "musescore4", "musescore", "musescore3")
+            if (path := shutil.which(name))
+        ),
+        None,
+    )
     mac = Path("/Applications/MuseScore 4.app/Contents/MacOS/mscore")
     if not binary and mac.exists():
         binary = str(mac)
     if not binary:
         return "MuseScore executable unavailable; native export skipped"
     try:
+        # Debian's cross-platform exporter is MuseScore 3; --sound-profile is v4-only.
+        sound_profile = (
+            [] if os.getenv("MUSESCORE_MAJOR") == "3" else ["--sound-profile", "MuseScore Basic"]
+        )
         result = subprocess.run(
             [
                 binary,
-                "--sound-profile",
-                "MuseScore Basic",
+                *sound_profile,
                 "-o",
                 str((output / "full_score.mscz").resolve()),
                 str((output / "full_score.musicxml").resolve()),

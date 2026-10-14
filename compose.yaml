@@ -1,0 +1,37 @@
+services:
+  app:
+    image: brass-studio:local
+    build:
+      context: .
+      target: app
+    init: true
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - jobs:/data
+      - models:/models
+    environment:
+      BRASS_MAX_UPLOAD_MB: "100"
+      BRASS_MAX_DURATION: "900"
+      BRASS_MAX_JOBS: "20"
+      BRASS_JOB_TIMEOUT: "7200"
+    stop_grace_period: 20s
+    restart: unless-stopped
+  models:
+    image: brass-studio:local
+    build:
+      context: .
+      target: app
+    profiles: [setup]
+    volumes:
+      - models:/models
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        brass-transcribe download-model --cache /models --variant nops
+        brass-transcribe download-model --cache /models --variant ps
+        brass-transcribe download-model --cache /models --variant beats
+        python -c "from pathlib import Path; from brass_transcriber.backend import prepare_ps_checkpoint; prepare_ps_checkpoint(Path('/models'))"
+volumes:
+  jobs:
+  models:

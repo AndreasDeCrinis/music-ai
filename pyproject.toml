@@ -17,11 +17,18 @@ dependencies = [
     "transformers==4.43.4",
     "beat-this==1.1.0",
     "madmom",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "python-multipart>=0.0.18",
+    "torch",
+    "torchaudio",
+    "torchvision",
 ]
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.9"]
+dev = ["pytest>=8", "ruff>=0.9", "httpx>=0.27"]
 [project.scripts]
 brass-transcribe = "brass_transcriber.cli:main"
+brass-web = "brass_transcriber.web:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -37,5 +44,12 @@ ignore = ["E501"]
 
 [tool.uv.sources]
 madmom = { git = "https://github.com/CPJKU/madmom.git", rev = "27f032e8947204902c675e5e341a3faf5dc86dae" }
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torchvision = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 [tool.hatch.metadata]
 allow-direct-references = true
