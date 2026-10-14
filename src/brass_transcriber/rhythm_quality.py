@@ -87,12 +87,32 @@ def beat_rhythm(
     # Use a strong first downbeat to establish bar phase. Weak opening beat
     # detections are not allowed to compress the first beat into an extreme tempo.
     earliest_anchor = max(0.5 * period, 0.5 * bar_length / unit * period - start)
+    inferred_pickup = False
+    if not pickup and start == 0:
+        early = next((d for d in prediction.downbeats if d >= 0.5 * period), None)
+        if early is not None:
+            opening = early / period * unit
+            candidate = round(opening / unit) * unit
+            if 0 < candidate < bar_length and abs(opening - candidate) <= 0.3 * unit:
+                pickup = float(candidate)
+                earliest_anchor = 0.5 * period
+                inferred_pickup = True
+    elif pickup and start == 0:
+        earliest_anchor = 0.5 * period
     first_downbeat = next((d for d in prediction.downbeats if d >= earliest_anchor), None)
     if first_downbeat is None:
         raise ValueError("No suitable downbeat anchor detected")
     down_index = int(np.argmin(abs(beats - first_downbeat)))
     down_absolute = first_downbeat + start
-    down_quarter = max(bar_length, round(down_absolute / period * unit / bar_length) * bar_length)
+    if pickup:
+        down_quarter = max(
+            pickup,
+            pickup + round((down_absolute / period * unit - pickup) / bar_length) * bar_length,
+        )
+    else:
+        down_quarter = max(
+            bar_length, round(down_absolute / period * unit / bar_length) * bar_length
+        )
     times = [0.0, float(down_absolute)]
     quarters = [0.0, float(down_quarter)]
     for index in range(down_index + 1, len(beats)):
@@ -115,7 +135,14 @@ def beat_rhythm(
         warnings=[
             "Beat/downbeat positions are model estimates; meter is configured, not proven.",
             "Opening lead-in uses a linear map to the first strong downbeat; verify pickup/first bar.",
-        ],
+        ]
+        + (
+            [
+                f"Provisional {pickup:g}-quarter-note pickup inferred from the first downbeat; verify against the recording."
+            ]
+            if inferred_pickup
+            else []
+        ),
     )
 
 

@@ -28,9 +28,12 @@ class Rhythm(BaseModel):
     tracker_device: str = "cpu"
     tracker_runtime: float = 0
     tempo_sections: list[TempoSection] = Field(default_factory=list)
+    notation_mode: str = "independent"
 
     @model_validator(mode="after")
     def validate_map(self):
+        if self.notation_mode not in {"independent", "phrases"}:
+            raise ValueError("Notation mode must be independent or phrases")
         if self.tempo_sections and (
             self.tempo_sections[0].quarter != 0
             or any(

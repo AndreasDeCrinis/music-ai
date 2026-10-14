@@ -32,6 +32,11 @@ def build_score(
     score.atSoundingPitch = False
     score.editorial["rhythm"] = rhythm.model_dump()
     mapping = []
+    fitted = {}
+    if rhythm.notation_mode == "phrases":
+        from .rhythm_fit import fit_assignments
+
+        fitted = fit_assignments(assignments, rhythm)
     bar_length = float(meter.TimeSignature(rhythm.time_signature).barDuration.quarterLength)
     padding = float(bar_length - rhythm.pickup) if rhythm.pickup else 0
     # Audio ends at an arbitrary sample, not a notatable rhythmic duration.
@@ -39,7 +44,13 @@ def build_score(
     # quantized offset extends beyond the audio. Never alter detected notes
     # simply to align the recording's endpoint with the notation grid.
     latest_note = max(
-        (quantize(a.note.start, a.note.end, rhythm)[1] for a in assignments if a.part),
+        (
+            fitted[a.note.id].offset
+            if a.note.id in fitted
+            else quantize(a.note.start, a.note.end, rhythm)[1]
+            for a in assignments
+            if a.part
+        ),
         default=0,
     )
     required_quarters = max(seconds_to_quarters(total_seconds, rhythm), latest_note, 1) + padding
@@ -135,7 +146,10 @@ def build_score(
         for a in selected:
             if config.percussion:
                 break
-            onset, offset = quantize(a.note.start, a.note.end, rhythm)
+            fit = fitted.get(a.note.id)
+            onset, offset = (
+                (fit.onset, fit.offset) if fit else quantize(a.note.start, a.note.end, rhythm)
+            )
             onset += padding
             offset += padding
             lane = next((i for i, end in enumerate(ends) if end <= onset + 1e-6), None)
@@ -174,6 +188,9 @@ def build_score(
                     onset_quarters=onset - padding,
                     duration_quarters=offset - onset,
                     confidence=a.confidence,
+                    rhythm_fitting=fit.method if fit else "independent grid rounding",
+                    motif_support=fit.motif_support if fit else 0,
+                    rhythm_fitting_fallback=fit.unresolved if fit else False,
                 )
             )
         for v in voices:
@@ -213,6 +230,11 @@ def build_score(
         # makeMeasures renumbers numeric Voice IDs from zero; MuseScore requires
         # positive MusicXML voice numbers. Normalize after measure/tie processing.
         for measure in part.getElementsByClass(stream.Measure):
+            if rhythm.notation_mode == "phrases":
+                from music21.stream.makeNotation import makeTupletBrackets
+
+                for container in list(measure.getElementsByClass(stream.Voice)) or [measure]:
+                    makeTupletBrackets(container, inPlace=True)
             for voice_index, voice in enumerate(measure.getElementsByClass(stream.Voice), 1):
                 voice.id = str(voice_index)
         score.insert(0, part)

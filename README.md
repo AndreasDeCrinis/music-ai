@@ -90,7 +90,7 @@ unnotatable trailing durations without changing detected notes.
 
 Use a new output directory for each successful run. `--no-mscz` skips MuseScore conversion. Conversion explicitly uses the MuseScore Basic sound profile; the installed MuseSounds/Cantai integration caused intermittent CLI crashes with the default profile. This changes the exported score profile, not system settings. `--normalize` enables FFmpeg loudness normalization. `--chunk-seconds 30 --overlap 2` bounds model inference memory; overlapping chunks retain raw MIDI independently. `--device cpu` is explicit; `auto` selects CPU on this Mac. MPS is deliberately rejected by this verified adapter.
 
-`--pickup 1` specifies a one-quarter-note anacrusis (short first bar). `--quantize 1/12` or `1/24` uses triplet grids; dotted values and ties are emitted by music21. There is no automatic pickup detection. Beat tracking estimates global tempo and beat positions; meter defaults provisionally to 4/4 because downbeat/meter inference is not implemented. Manual tempo/meter are recommended for brass recordings with rubato.
+`--pickup 1` specifies a one-quarter-note anacrusis (short first bar). `--quantize 1/12` or `1/24` uses triplet grids; dotted values and ties are emitted by music21. The standard transcription command does not detect pickups automatically. Its beat tracking estimates global tempo and beat positions; meter defaults provisionally to 4/4. The quality pipeline adds neural downbeats and provisional pickup detection, using the configured meter. Manual tempo/meter are recommended when these estimates are uncertain.
 
 Excerpt note times remain **absolute relative to the original recording**, including leading rests in the score. MIDI-import mode uses absolute times unchanged:
 
@@ -134,7 +134,10 @@ Explicit MusicXML forward/backup anchors prevent
 MuseScore from dropping tempo changes inside long rests. Ensembles with at most
 15 pitched parts get separate MIDI channels per desk, retaining overlapping
 unisons independently. The first bar's lead-in and any pickup still need
-review. `--tempo` deliberately selects constant-tempo timing instead.
+review. In quality mode, a first downbeat that fits a short whole-beat opening
+can suggest a provisional pickup instead of forcing a full first bar and a
+false slow opening tempo. Review this inference; explicit nonzero pickup
+settings are preserved. `--tempo` deliberately selects constant-tempo timing instead.
 Monophonic voice tracking and whole-phrase part assignment reduce isolated
 notes switching desks. They cannot identify the original player from a mixed
 recording. A short isolated fragment supported by only one pass remains
@@ -174,6 +177,43 @@ not actual note accuracy. A reference score or annotated passage is needed to
 measure pitch precision and to tune instrument assignment reliably.
 
 ## Output files
+
+### Refine rhythm and instrument continuity without inference
+
+```sh
+uv run brass-transcribe refine ./output-500-miles --output ./output-500-miles-enhanced
+```
+
+This reuses cached predictions and quality selection. The destination must be
+separate from the source. Raw notes and rejected candidates stay available.
+Previously scored, selected notes are retained. Unassigned candidates remain
+available for review. The beam search keeps the complete cached assignment as
+a feasible fallback. A required handoff is exempt
+from the instrument-switch penalty when the former part is unavailable because
+of range or overlap constraints.
+
+Persistent melodic identities link phrases across rests using entry pitch,
+register, rhythm and recurring melodic motifs. Returning motifs can reconnect
+after an intervening phrase. Similar instrument sounds have a stronger switching
+penalty, while genuinely ambiguous identities remain separate. These identities
+are provisional, not verified player labels.
+
+Joint phrase fitting chooses attacks, releases and intervening rests together.
+Shared ensemble attacks stay aligned. Repeated motifs provide duration priors;
+complete, coherent three-note groups within one melodic line enable triplets.
+Uncertain or mixed groups use the regular grid. Close repeated attacks can use
+32nd notes to avoid a grid collision. Successful fits limit onset movement to
+0.18 quarter notes and release movement to 0.20 quarter notes against the
+source beat map. An infeasible fit falls back to the configured grid and is
+explicitly recorded instead of deleting the detection. Staccato gaps are
+retained; short rounding gaps near legato releases receive a penalty.
+
+`diagnostics/refinement_report.json` compares linked-phrase part changes,
+extra notation voices and small gaps near legato boundaries. `phrases.json`
+records identity links and evidence; score provenance records the fitting
+method, repeated-motif support and fallbacks. These measure structural changes,
+not reference-score accuracy. `resume` preserves refinement settings, including
+when changing tempo. New `improve` runs use these stages automatically.
 
 - `full_score.musicxml`: the selected ensemble's named instrumental parts, written pitches and MusicXML transposition metadata.
 - `full_score.mid`: concert-pitch, quantized score MIDI (unquantized model MIDI in `--midi-only` mode).

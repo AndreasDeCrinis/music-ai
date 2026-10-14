@@ -330,6 +330,9 @@ def resume(
             )
         else:
             rhythm = original_rhythm
+        rhythm = Rhythm.model_validate(
+            {**rhythm.model_dump(), "notation_mode": original_rhythm.notation_mode}
+        )
         assigned_path = intermediate / "assigned_voices.json"
         if regularize:
             from .rhythm import regularize_tempo
@@ -350,7 +353,7 @@ def resume(
                 effective = [
                     NoteEvent.model_validate(n) for n in json.loads(effective_path.read_text())
                 ]
-                assignments, _ = assign_phrases(effective, parts)
+                assignments, _ = assign_phrases(effective, parts, rhythm=rhythm)
                 retained = {n.id for n in effective}
                 assignments.extend(
                     Assignment(
@@ -374,15 +377,45 @@ def resume(
         if assignment_changed or not assigned_path.exists():
             assigned_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
         save_run_settings(output, rhythm, length, excerpt_start, parts, selected_ensemble)
-        if settings.get("quality"):
-            settings_path = output / "intermediate/run_settings.json"
-            updated = json.loads(settings_path.read_text())
-            updated["quality"] = settings["quality"]
-            settings_path.write_text(json.dumps(updated, indent=2))
+        for key in ("quality", "refinement"):
+            if settings.get(key):
+                settings_path = output / "intermediate/run_settings.json"
+                updated = json.loads(settings_path.read_text())
+                updated[key] = settings[key]
+                settings_path.write_text(json.dumps(updated, indent=2))
         (output / "diagnostics").mkdir(exist_ok=True)
         finish_run(
             result, assignments, parts, rhythm, length, excerpt_start, output, False, mscz, warnings
         )
+    except (ValueError, RuntimeError, FileNotFoundError, Music21Exception) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@app.command()
+def refine(
+    source: Path,
+    output: Path = typer.Option(Path("output-refined"), "--output"),
+    beam_size: int = typer.Option(64, min=4, max=256),
+    mscz: bool = typer.Option(True, "--mscz/--no-mscz"),
+):
+    """Refine cached notes with persistent instrument identities and joint rhythm fitting."""
+    from .refinement import refine_cached, write_refinement_report
+
+    try:
+        run = refine_cached(source, output, beam_size)
+        finish_run(
+            run.result,
+            run.assignments,
+            run.parts,
+            run.rhythm,
+            run.duration,
+            run.start,
+            output,
+            False,
+            mscz,
+            ["Cached predictions refined; raw notes unchanged."],
+        )
+        typer.echo(json.dumps(write_refinement_report(run, output), indent=2))
     except (ValueError, RuntimeError, FileNotFoundError, Music21Exception) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -491,7 +524,7 @@ def diagnose(output: Path):
 
 def main():
     # Preserve requested bare-file interface while retaining diagnostic subcommands.
-    commands = {"transcribe", "diagnose", "doctor", "download-model", "resume", "improve"}
+    commands = {"transcribe", "diagnose", "doctor", "download-model", "resume", "improve", "refine"}
     if len(sys.argv) > 1 and sys.argv[1] not in commands and not sys.argv[1].startswith("-"):
         sys.argv.insert(1, "transcribe")
     app()

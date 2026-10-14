@@ -7,6 +7,8 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from .models import Assignment, NoteEvent, PartConfig
+from .rhythm import Rhythm
+from .voice_identity import link_voices
 
 
 @dataclass
@@ -70,6 +72,22 @@ class PhraseState:
     decisions: list[tuple[int, str | None, float]] = field(default_factory=list)
     active: dict[str, list[NoteEvent]] = field(default_factory=dict)
     last: dict[str, NoteEvent] = field(default_factory=dict)
+    identity_parts: dict[str, str] = field(default_factory=dict)
+
+
+def available(phrase: Phrase, part: PartConfig, state: PhraseState) -> bool:
+    if part.percussion or any(
+        not part.extended[0] <= n.pitch <= part.extended[1] for n in phrase.notes
+    ):
+        return False
+    occupied = [n for n in state.active.get(part.id, []) if n.end > phrase.start + 0.01]
+    return not any(
+        sum(
+            previous.start < n.end - 0.01 and previous.end > n.start + 0.01 for previous in occupied
+        )
+        >= part.max_simultaneous
+        for n in phrase.notes
+    )
 
 
 def phrase_cost(phrase: Phrase, part: PartConfig, known_programs: set[int]) -> float | None:
@@ -94,20 +112,59 @@ def phrase_cost(phrase: Phrase, part: PartConfig, known_programs: set[int]) -> f
 
 
 def assign_phrases(
-    notes: list[NoteEvent], parts: list[PartConfig], beam_size: int = 32
+    notes: list[NoteEvent],
+    parts: list[PartConfig],
+    beam_size: int = 32,
+    rhythm: Rhythm | None = None,
+    persistent: bool = True,
+    prior_parts: dict[str, str] | None = None,
 ) -> tuple[list[Assignment], dict]:
     phrases = track_phrases(notes)
+    if prior_parts is not None:
+        # Keep the full detection context for tracking, then trim unscored notes.
+        # Split at existing part boundaries so the cached score remains a feasible
+        # complete assignment, even when tracking joins two historical voices.
+        protected_phrases = []
+        for phrase in phrases:
+            runs = []
+            for n in phrase.notes:
+                if n.id not in prior_parts:
+                    continue
+                if not runs or prior_parts[runs[-1][-1].id] != prior_parts[n.id]:
+                    runs.append([n])
+                else:
+                    runs[-1].append(n)
+            protected_phrases.extend(
+                Phrase(f"{phrase.id}-run-{i}", run) for i, run in enumerate(runs)
+            )
+        phrases = protected_phrases
     order = sorted(
         range(len(phrases)),
         key=lambda i: (phrases[i].start, -np.mean([n.pitch for n in phrases[i].notes])),
     )
     known = {p.program for p in parts if not p.percussion}
+    links = link_voices(phrases, rhythm, known) if persistent else {}
+    part_by_id = {p.id: p for p in parts}
     beam = [PhraseState()]
+    baseline = beam[0] if prior_parts is not None else None
     for phrase_index in order:
         phrase = phrases[phrase_index]
+        link = links.get(phrase_index)
+        prior_votes = Counter(
+            prior_parts[n.id] for n in phrase.notes if prior_parts and n.id in prior_parts
+        )
+        protected = bool(prior_votes)
         expanded = []
-        for state in beam:
+        next_baseline = None
+        states = beam + (
+            [baseline] if baseline is not None and all(s is not baseline for s in beam) else []
+        )
+        for state in states:
             options = []
+            identity_part = state.identity_parts.get(link.voice) if link else None
+            identity_available = bool(
+                identity_part and available(phrase, part_by_id[identity_part], state)
+            )
             for part in parts:
                 cost = phrase_cost(phrase, part, known)
                 if cost is None:
@@ -125,6 +182,11 @@ def assign_phrases(
                 prior = state.last.get(part.id)
                 if prior and 0 <= phrase.start - prior.end < 2:
                     cost += abs(phrase.notes[0].pitch - prior.pitch) / 24 - 0.3
+                if identity_available and identity_part != part.id:
+                    same_sound = part_by_id[identity_part].program == part.program
+                    cost += link.strength * (2.4 if same_sound else 1.8)
+                if prior_votes:
+                    cost += 0.15 * (1 - prior_votes.get(part.id, 0) / sum(prior_votes.values()))
                 # Crossing is a soft preference: genuine crossings must remain possible.
                 for other in parts:
                     for active_note in state.active.get(other.id, []):
@@ -137,9 +199,15 @@ def assign_phrases(
                             cost += 0.035
                 options.append((cost, part))
             options.sort(key=lambda x: (x[0], x[1].id))
-            if ambiguous_orphan(phrase, options):
+            if ambiguous_orphan(phrase, options) and not protected:
                 options = []
-            for cost, part in options[:6] + [(4.2, None)]:
+            choices = options[:6]
+            if baseline is state and protected:
+                original = next(iter(prior_votes))
+                choices += [(c, p) for c, p in options[6:] if p.id == original]
+            if not protected:
+                choices += [(4.2, None)]
+            for cost, part in choices:
                 confidence = 0
                 if part:
                     alternative = min((c for c, p in options if p.id != part.id), default=cost)
@@ -149,24 +217,35 @@ def assign_phrases(
                     for k, v in state.active.items()
                 }
                 last = dict(state.last)
+                identities = dict(state.identity_parts)
                 if part:
                     active[part.id] = active.get(part.id, []) + phrase.notes
                     last[part.id] = phrase.notes[-1]
+                    if link:
+                        identities[link.voice] = part.id
                 # Each phrase contributes one normalized cost so long musical lines
                 # cannot be fragmented merely to distribute their notes among desks.
-                expanded.append(
-                    PhraseState(
-                        state.cost + cost,
-                        state.decisions + [(phrase_index, part.id if part else None, confidence)],
-                        active,
-                        last,
-                    )
+                child = PhraseState(
+                    state.cost + cost,
+                    state.decisions + [(phrase_index, part.id if part else None, confidence)],
+                    active,
+                    last,
+                    identities,
                 )
+                expanded.append(child)
+                if state is baseline and part and prior_votes.get(part.id):
+                    next_baseline = child
+        if baseline is not None and next_baseline is None:
+            raise ValueError(
+                "Cached scored notes violate the configured range or polyphony constraints"
+            )
+        baseline = next_baseline
         beam = sorted(expanded, key=lambda s: s.cost)[:beam_size]
     assignments = []
     details = []
     for phrase_index, part, confidence in beam[0].decisions:
         phrase = phrases[phrase_index]
+        link = links.get(phrase_index)
         details.append(
             dict(
                 id=phrase.id,
@@ -175,6 +254,12 @@ def assign_phrases(
                 source_ids=[n.id for n in phrase.notes],
                 start=phrase.start,
                 end=phrase.end,
+                voice=link.voice if link else phrase.id,
+                predecessor=phrases[link.predecessor].id
+                if link and link.predecessor is not None
+                else None,
+                identity_strength=link.strength if link else 0,
+                identity_evidence=link.evidence if link else "phrase-only assignment",
             )
         )
         for n in phrase.notes:
@@ -184,12 +269,13 @@ def assign_phrases(
                     part=part,
                     confidence=confidence,
                     reason=f"provisional whole-phrase optimization: {phrase.id}"
+                    + (f"; persistent {link.voice}" if link else "")
                     if part
                     else f"no sufficiently supported part for {phrase.id}; retained for review",
                 )
             )
     for n in notes:
-        if n.drum:
+        if n.drum and (prior_parts is None or n.id in prior_parts):
             part = next(
                 (p for p in parts if p.percussion and p.extended[0] <= n.pitch <= p.extended[1]),
                 None,

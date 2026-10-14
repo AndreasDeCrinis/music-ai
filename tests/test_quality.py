@@ -159,6 +159,24 @@ def test_early_downbeat_does_not_compress_a_whole_bar():
     assert 60 < tempo_map(rhythm)[0][1] < 180
 
 
+def test_detected_pickup_does_not_create_false_slow_opening():
+    from brass_transcriber.rhythm import regularize_tempo
+
+    beats = [0.38, 0.86, 1.3, 1.76, 2.2, 2.66, 3.12, 3.56, 4.02, 4.48, 4.94, 5.38, 5.84, 6.3]
+    prediction = BeatAnalysis(
+        beats=beats,
+        downbeats=[0.86, 2.66, 4.48, 6.3],
+        beat_numbers=[4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1],
+        runtime=0,
+    )
+    rhythm = regularize_tempo(beat_rhythm(prediction))
+    assert rhythm.pickup == 2
+    assert seconds_to_quarters(0.86, rhythm) == 2
+    assert seconds_to_quarters(2.66, rhythm) == 6
+    assert len(tempo_map(rhythm)) == 1
+    assert tempo_map(rhythm)[0][1] in {132, 133}
+
+
 def test_quality_resume_preserves_selection_metadata_and_map(tmp_path):
     source = tmp_path / "source"
     intermediate = source / "intermediate"

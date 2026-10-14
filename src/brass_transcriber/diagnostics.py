@@ -72,6 +72,8 @@ def report(
         data["ensemble"] = settings.get("ensemble")
         if settings.get("quality"):
             data["quality"] = settings["quality"]
+        if settings.get("refinement"):
+            data["refinement"] = settings["refinement"]
     data["percussion_notes"] = sum(n.drum for n in result.notes)
     data["assigned_percussion_notes"] = sum(a.note.drum and a.part is not None for a in assignments)
     (output / "diagnostics/transcription_report.json").write_text(json.dumps(data, indent=2))

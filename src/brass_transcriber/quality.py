@@ -98,6 +98,7 @@ def improve_run(
         original_rhythm.pickup,
         tempo_override,
     )
+    rhythm = Rhythm.model_validate({**rhythm.model_dump(), "notation_mode": "phrases"})
     log.info("Quality: harmonic-template audio evidence")
     evidence = analyze_evidence(audio, intermediate / "pitch_evidence.npz", start)
     results = {"baseline": baseline}
@@ -151,7 +152,7 @@ def improve_run(
     write_midi(result.notes, intermediate / "raw_transcription.mid", rhythm.tempo)
     write_midi(selected, intermediate / "selected_transcription.mid", rhythm.tempo)
     log.info("Quality: track melodic voices and assign complete phrases")
-    assignments, phrases = assign_phrases(selected, ensemble.parts, beam_size)
+    assignments, phrases = assign_phrases(selected, ensemble.parts, beam_size, rhythm=rhythm)
     (intermediate / "phrases.json").write_text(json.dumps(phrases, indent=2))
     selected_ids = {n.id for n in selected}
     rejected = {d["id"]: d for d in decisions if d["action"] == "reject"}
