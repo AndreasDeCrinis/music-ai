@@ -125,8 +125,12 @@ not independent proof of correctness.
 
 Beat This! estimates beat/downbeat activations, and a madmom HMM decoder imposes
 metrical continuity using the configured meter. Notes are quantized against a
-piecewise tempo map; hidden tempo changes preserve this timing in MusicXML,
-MIDI and MuseScore playback. Explicit MusicXML forward/backup anchors prevent
+shared beat grid. Playback uses rounded, integer-BPM sections, smoothing small
+performance timing variations. Sustained changes of at least 6 BPM and about
+6% over two or more measures remain visible in the score and extracted parts.
+For example, 16 bars at 130 BPM followed by 150 BPM retain a tempo change at
+bar 17. Original beat observations remain cached for note placement and review.
+Explicit MusicXML forward/backup anchors prevent
 MuseScore from dropping tempo changes inside long rests. Ensembles with at most
 15 pitched parts get separate MIDI channels per desk, retaining overlapping
 unisons independently. The first bar's lead-in and any pickup still need
@@ -152,6 +156,8 @@ Root `model_notes.json` and
 `raw_transcription.mid` retain the unfiltered combined hypotheses. Original
 baseline files are copied into `intermediate/baseline/` and remain unchanged
 in the source run. `resume` preserves quality selection, timing and metadata;
+use `resume ./output --output ./output-steady --regularize-tempo` to apply
+steady section tempos to an existing cached run without repeating inference.
 an explicit new ensemble reassigns selected notes only.
 
 The alternate checkpoint's SHA-256 is

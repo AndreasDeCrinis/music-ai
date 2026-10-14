@@ -7,7 +7,7 @@ import numpy as np
 import soundfile as sf
 from pydantic import BaseModel
 
-from .rhythm import Rhythm, analyze, grid_quarters
+from .rhythm import Rhythm, analyze, grid_quarters, regularize_tempo
 
 
 class BeatAnalysis(BaseModel):
@@ -136,4 +136,4 @@ def analyze_quality(
     prediction = neural_beats(
         audio, cache / "beat_this/final0.ckpt", meter, baseline.tempo, artifacts
     )
-    return beat_rhythm(prediction, meter, grid, start, pickup)
+    return regularize_tempo(beat_rhythm(prediction, meter, grid, start, pickup))

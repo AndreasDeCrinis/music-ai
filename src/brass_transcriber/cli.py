@@ -257,6 +257,11 @@ def resume(
         None, min=0, help="Excerpt start for legacy runs without saved settings"
     ),
     mscz: bool = typer.Option(True, "--mscz/--no-mscz"),
+    regularize: bool = typer.Option(
+        False,
+        "--regularize-tempo",
+        help="Use shared integer-BPM sections, smoothing small timing variations",
+    ),
 ):
     """Re-export a saved transcription without running or loading the model."""
     if config is not None and ensemble is not None:
@@ -326,6 +331,10 @@ def resume(
         else:
             rhythm = original_rhythm
         assigned_path = intermediate / "assigned_voices.json"
+        if regularize:
+            from .rhythm import regularize_tempo
+
+            rhythm = regularize_tempo(rhythm)
         assignments = (
             [Assignment.model_validate(a) for a in json.loads(assigned_path.read_text())]
             if assigned_path.exists()

@@ -83,7 +83,7 @@ def build_score(
         part.insert(0, meter.TimeSignature(rhythm.time_signature))
         for tempo_index, (position, bpm) in enumerate(tempo_map(rhythm)):
             mark = tempo.MetronomeMark(number=bpm)
-            if tempo_index:
+            if tempo_index and not rhythm.tempo_sections:
                 mark.style.hideObjectOnPrint = True
             part.insert(position + (padding if position else 0), mark)
         ends = [0.0] * config.max_simultaneous
@@ -252,6 +252,7 @@ def export_score(score: stream.Score, output: Path) -> None:
     for part in score.parts:
         extracted = stream.Score()
         extracted.atSoundingPitch = False
+        extracted.editorial["rhythm"] = copy.deepcopy(score.editorial.get("rhythm", {}))
         extracted.insert(0, copy.deepcopy(part))
         path = output / "parts" / f"{part.id}.musicxml"
         extracted.write("musicxml", fp=path)
@@ -330,12 +331,14 @@ def enrich_xml(path: Path, score: stream.Score) -> None:
         if source_id:
             seen[source_id] = seen.get(source_id, 0) + 1
             xml_note.set("id", f"{source_id}-segment-{seen[source_id]}")
-    normalize_tempo_directions(root)
+    normalize_tempo_directions(
+        root, show_changes=bool(score.editorial.get("rhythm", {}).get("tempo_sections"))
+    )
     ET.indent(root)
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
 
-def normalize_tempo_directions(root: ET.Element) -> None:
+def normalize_tempo_directions(root: ET.Element, show_changes: bool = False) -> None:
     """Anchor tempo directions with explicit clock advances rather than offsets.
 
     MuseScore loses some offset-based changes inside long rests. A sequence of
@@ -356,7 +359,7 @@ def normalize_tempo_directions(root: ET.Element) -> None:
                     offset = element.find("offset")
                     if offset is not None:
                         element.remove(offset)
-                    if not first:
+                    if not first and not show_changes:
                         element.set("print-object", "no")
                     first = False
                     directions.append((position, element))
