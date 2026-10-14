@@ -352,7 +352,7 @@ def resume(
         if assignment_changed:
             effective_path = intermediate / "quality_notes.json"
             if effective_path.exists():
-                from .phrases import add_phrases, assign_phrases
+                from .phrases import add_phrases, assign_phrases, place_unassigned
 
                 effective = [
                     NoteEvent.model_validate(n) for n in json.loads(effective_path.read_text())
@@ -370,6 +370,7 @@ def resume(
                 assignments, _ = assign_phrases(
                     [n for n in effective if n.id not in dependent], parts, rhythm=rhythm
                 )
+                assignments = place_unassigned(assignments, parts)
                 assignments = add_phrases(
                     assignments, [n for n in effective if n.id in dependent], parts
                 )

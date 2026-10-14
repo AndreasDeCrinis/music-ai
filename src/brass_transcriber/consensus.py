@@ -8,6 +8,18 @@ import numpy as np
 from .evidence import PitchEvidence
 from .models import NoteEvent, TranscriptionResult
 
+# Additional notes within this onset distance, or overlapping this share of their
+# duration, of a kept same-pitch note are treated as the same played note.
+DUPLICATE_ONSET = 0.07
+DUPLICATE_OVERLAP = 0.3
+# Harmonic salience below which a note an octave above a kept note counts as overtone.
+OCTAVE_GHOST_SALIENCE = 0.2
+# Harmonic salience every pitched note needs, and the stricter bar for primary notes
+# that no other pass heard (measured precision of such notes is low).
+MIN_SALIENCE = 0.05
+SINGLE_PASS_MIN_SALIENCE = 0.2
+LISTENER_MIN_SALIENCE = 0.1
+
 
 @dataclass
 class Hypothesis:
@@ -103,15 +115,12 @@ def build_consensus(
                     if keep
                     else "unsupported alternate-only drum hit"
                 )
+            if salience is not None and salience < MIN_SALIENCE:
+                return False, "no harmonic evidence for this pitch"
             if primary_observation is not None:
-                weak = (
-                    support == 1
-                    and end - start < 0.075
-                    and salience is not None
-                    and salience < 0.04
-                )
+                weak = support == 1 and salience is not None and salience < SINGLE_PASS_MIN_SALIENCE
                 return not weak, (
-                    "very short, single-pass note with weak harmonic evidence"
+                    "single-pass note with weak harmonic evidence"
                     if weak
                     else "retained primary-model note"
                 )
@@ -127,6 +136,8 @@ def build_consensus(
         base_support = len({p for p, _ in g.observations if p not in trusted})
         if base_support:
             keep, reason = decide(support)
+        elif salience is not None and salience < LISTENER_MIN_SALIENCE:
+            keep, reason = False, "listener note with weak harmonic evidence"
         else:
             keep, reason = True, "separated upper-register listener note"
         # Notes kept only because of a trusted listener are placed after, never
@@ -161,25 +172,57 @@ def build_consensus(
                 ],
             )
         )
-    # Listener-dependent notes must not duplicate a kept same-pitch note with shifted timing.
-    dependent = {d["id"] for d in decisions if d["listener_dependent"]}
+    # Passes disagree slightly on onsets and note splits, so one played note can form
+    # several hypotheses. Additional (non-primary) notes must not duplicate a kept
+    # same-pitch note; better supported additions are considered first.
+    by_id = {d["id"]: d for d in decisions}
     anchors = {}
-    for other in selected:
-        if other.id not in dependent:
-            anchors.setdefault(other.pitch, []).append(other)
+    for n in selected:
+        if not n.drum and by_id[n.id]["primary_support"]:
+            anchors.setdefault(n.pitch, []).append(n)
+    additions = sorted(
+        (n for n in selected if not n.drum and not by_id[n.id]["primary_support"]),
+        key=lambda n: (-by_id[n.id]["pass_support"], n.start - n.end, n.start, n.id),
+    )
     duplicates = set()
-    for decision, n in zip(decisions, all_notes):
-        if n.id in dependent and any(
-            min(other.end, n.end) - max(other.start, n.start) > 0.3 * (n.end - n.start)
+    for n in additions:
+        if any(
+            abs(other.start - n.start) < DUPLICATE_ONSET
+            or min(other.end, n.end) - max(other.start, n.start)
+            > DUPLICATE_OVERLAP * (n.end - n.start)
             for other in anchors.get(n.pitch, [])
         ):
-            decision.update(
+            by_id[n.id].update(
                 action="reject",
-                reason="listener note duplicates a kept note",
+                reason="duplicates a kept same-pitch note",
                 listener_dependent=False,
             )
             duplicates.add(n.id)
+        else:
+            anchors.setdefault(n.pitch, []).append(n)
     selected = [n for n in selected if n.id not in duplicates]
+    # An upper octave over a kept note with little harmonic evidence of its own is
+    # usually that note's overtone, not a separate player.
+    if evidence is not None:
+        by_pitch = {}
+        for n in selected:
+            if not n.drum:
+                by_pitch.setdefault(n.pitch, []).append(n)
+        ghosts = set()
+        for n in selected:
+            if n.drum or by_id[n.id]["audio_salience"] is None:
+                continue
+            if by_id[n.id]["audio_salience"] < OCTAVE_GHOST_SALIENCE and any(
+                min(o.end, n.end) - max(o.start, n.start) > 0.5 * (n.end - n.start)
+                for o in by_pitch.get(n.pitch - 12, [])
+            ):
+                by_id[n.id].update(
+                    action="reject",
+                    reason="octave overtone of a kept note with weak harmonic evidence",
+                    listener_dependent=False,
+                )
+                ghosts.add(n.id)
+        selected = [n for n in selected if n.id not in ghosts]
     result = TranscriptionResult(
         notes=all_notes,
         model=f"YourMT3+ multi-pass hypotheses (primary {primary})",

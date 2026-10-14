@@ -118,8 +118,16 @@ This uses the alternate YourMT3+ pitch-shift-trained MoE checkpoint, then two
 additional passes on audio shifted up/down one semitone with different chunk
 boundaries. Detected pitches are shifted back before comparison. The unshifted
 PS pass anchors selection: augmentations can miss valid notes, so absence in
-those passes does not by itself reject a primary note. Alternate-only additions
-require agreement or harmonic-template audio evidence. Every retained/rejected
+those passes does not by itself reject a primary note. Primary notes that no
+other pass heard need some harmonic-template evidence for their pitch, and every
+pitched note needs a minimum. Alternate-only additions require agreement or
+strong audio evidence and are dropped when they duplicate a kept note of the
+same pitch (slightly shifted onsets or split sustains). A weakly evidenced note
+an octave above a kept note is treated as its overtone. Thresholds are constants
+in `consensus.py`; they were tuned on MuseScore renderings of transcribed scores,
+where they reduced wrong notes from 28-32% to 16-19% of the output and removed
+about 30% of notes overall for a 2-point loss in found notes. Phrases that fit no
+single free part are split across free parts rather than dropped. Every retained/rejected
 hypothesis has a decision and its original observations saved for review.
 These passes share an architecture and are correlated; agreement is a heuristic,
 not independent proof of correctness.

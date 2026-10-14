@@ -23,7 +23,7 @@ from .models import (
     load_ensemble,
     write_midi,
 )
-from .phrases import add_phrases, assign_phrases
+from .phrases import add_phrases, assign_phrases, place_unassigned
 from .rhythm import Rhythm, quantize, quarters_to_seconds
 from .rhythm_quality import analyze_quality
 
@@ -175,6 +175,7 @@ def improve_run(
     assignments, phrases = assign_phrases(
         [n for n in selected if n.id not in dependent], ensemble.parts, beam_size, rhythm=rhythm
     )
+    assignments = place_unassigned(assignments, ensemble.parts)
     assignments = add_phrases(
         assignments, [n for n in selected if n.id in dependent], ensemble.parts
     )

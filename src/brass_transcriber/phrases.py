@@ -299,42 +299,86 @@ def assign_phrases(
     )
 
 
+def free_for(part: PartConfig, notes: list[NoteEvent], occupied: list[NoteEvent]) -> bool:
+    return not any(
+        sum(other.start < n.end - 0.01 and other.end > n.start + 0.01 for other in occupied)
+        >= part.max_simultaneous
+        for n in notes
+    )
+
+
 def add_phrases(
-    assignments: list[Assignment], notes: list[NoteEvent], parts: list[PartConfig]
+    assignments: list[Assignment],
+    notes: list[NoteEvent],
+    parts: list[PartConfig],
+    label: str = "listener note",
+    phrases: list[Phrase] | None = None,
 ) -> list[Assignment]:
-    """Place extra notes into parts that are free; existing assignments never move."""
+    """Place extra notes into parts that are free; existing assignments never move.
+
+    A phrase that fits no single free part is split note by note, keeping
+    consecutive notes on the same part where possible.
+    """
     known = evidence_groups(parts)
     occupied: dict[str, list[NoteEvent]] = {p.id: [] for p in parts}
     for a in assignments:
         if a.part in occupied:
             occupied[a.part].append(a.note)
+    if phrases is None:
+        phrases = [Phrase(f"listener-{p.id}", p.notes) for p in track_phrases(notes)]
     added = []
-    for phrase in sorted(track_phrases(notes), key=lambda p: (p.start, p.id)):
-        options = []
-        for part in parts:
-            cost = phrase_cost(phrase, part, known)
-            if cost is None or any(
-                sum(
-                    other.start < n.end - 0.01 and other.end > n.start + 0.01
-                    for other in occupied[part.id]
-                )
-                >= part.max_simultaneous
-                for n in phrase.notes
-            ):
-                continue
-            options.append((cost, part.id))
-        part_id = min(options)[1] if options else None
-        if part_id:
-            occupied[part_id].extend(phrase.notes)
+    for phrase in sorted(phrases, key=lambda p: (p.start, p.id)):
+        options = [
+            (cost, part.id)
+            for part in parts
+            if (cost := phrase_cost(phrase, part, known)) is not None
+            and free_for(part, phrase.notes, occupied[part.id])
+        ]
+        split = not options
+        choices = []
+        previous = None
+        for n in phrase.notes:
+            if not split:
+                previous = min(options)[1]
+            else:
+                single = Phrase(phrase.id, [n])
+                candidates = [
+                    (cost - (0.3 if part.id == previous else 0), part.id)
+                    for part in parts
+                    if (cost := phrase_cost(single, part, known)) is not None
+                    and free_for(part, [n], occupied[part.id])
+                ]
+                previous = min(candidates)[1] if candidates else None
+            if previous:
+                occupied[previous].append(n)
+            choices.append((n, previous))
         added.extend(
             Assignment(
                 note=n,
                 part=part_id,
-                confidence=0.3 if part_id else 0,
-                reason=f"listener note added to free part: listener-{phrase.id}"
+                confidence=(0.2 if split else 0.3) if part_id else 0,
+                reason=f"{label} added to free part: {phrase.id}{' (split)' if split else ''}"
                 if part_id
-                else f"listener note; no free part for listener-{phrase.id}; retained for review",
+                else f"{label}; no free part for {phrase.id}; retained for review",
             )
-            for n in phrase.notes
+            for n, part_id in choices
         )
     return assignments + added
+
+
+def place_unassigned(assignments: list[Assignment], parts: list[PartConfig]) -> list[Assignment]:
+    """Retry multi-note phrases that found no whole free part, splitting them if needed.
+
+    Single-note phrases stay unassigned: they are often ambiguous fragments.
+    """
+    prefix = "no sufficiently supported part for "
+    groups: dict[str, list[NoteEvent]] = {}
+    for a in assignments:
+        if a.part is None and not a.note.drum and a.reason.startswith(prefix):
+            groups.setdefault(a.reason[len(prefix) :].split(";")[0], []).append(a.note)
+    phrases = [Phrase(pid, notes) for pid, notes in groups.items() if len(notes) > 1]
+    retry = {n.id for p in phrases for n in p.notes}
+    if not retry:
+        return assignments
+    kept = [a for a in assignments if a.note.id not in retry]
+    return add_phrases(kept, [], parts, label="phrase without a whole free part", phrases=phrases)

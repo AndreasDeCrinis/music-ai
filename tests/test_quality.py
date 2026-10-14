@@ -103,7 +103,7 @@ def test_listener_only_notes_are_kept_unless_they_duplicate_a_kept_note():
     _, selected, decisions = build_consensus(passes, "ps", trusted=frozenset({"separated"}))
     reasons = {d["sources"][0]["note_id"]: d["reason"] for d in decisions}
     assert {n.pitch for n in selected} == {80, 83}
-    assert reasons["shifted"] == "listener note duplicates a kept note"
+    assert reasons["shifted"] == "duplicates a kept same-pitch note"
     assert reasons["clarinet"] == "separated upper-register listener note"
     assert reasons["alone"] == "unsupported alternate-only note"
     _, selected, _ = build_consensus(passes, "ps")
@@ -136,6 +136,62 @@ def test_added_listener_phrases_never_move_existing_assignments():
     result = add_phrases(existing, extra, parts)
     assert result[0] == existing[0]
     assert next(a for a in result if a.note.id == "new").part not in {None, "eb_clarinet"}
+
+
+def flat_evidence(saliences):
+    """Evidence where each listed pitch has the given relative activation."""
+    pitches = np.array(sorted(saliences) + [100])
+    rows = [[saliences.get(p, 1.0)] * 400 for p in pitches[:-1]] + [[1.0] * 400]
+    return PitchEvidence(np.array(rows), np.arange(400) * 0.01, pitches)
+
+
+def test_alternate_duplicates_octave_ghosts_and_weak_single_pass_notes_are_rejected():
+    evidence = flat_evidence({60: 1.0, 72: 0.1, 64: 0.15, 67: 0.15, 62: 1.0})
+    passes = {
+        "ps": prediction(
+            [
+                event("root", 60, 0, 1),
+                event("ghost", 72, 0, 1),
+                event("lonely", 64, 1.5, 2),
+                event("confirmed", 67, 2.5, 3),
+            ]
+        ),
+        # Same pitch as "root" but outside the matching tolerance: one played note.
+        "up": prediction(
+            [event("late", 60, 0.09, 1), event("c2", 67, 2.5, 3), event("g2", 72, 0, 1)]
+        ),
+        "down": prediction([event("late2", 60, 0.09, 1), event("new", 62, 3.2, 3.8)]),
+    }
+    passes["down"].notes.append(event("new2", 62, 3.2, 3.8))
+    passes["up"].notes.append(event("new3", 62, 3.2, 3.8))
+    _, selected, decisions = build_consensus(passes, "ps", evidence)
+    reasons = {d["sources"][0]["note_id"]: d["reason"] for d in decisions}
+    assert sorted(n.pitch for n in selected) == [60, 62, 67]
+    assert reasons["late"] == "duplicates a kept same-pitch note"
+    assert reasons["ghost"] == "octave overtone of a kept note with weak harmonic evidence"
+    assert reasons["lonely"] == "single-pass note with weak harmonic evidence"
+
+
+def test_unplaceable_phrase_is_split_into_free_parts():
+    from brass_transcriber.phrases import place_unassigned
+
+    parts = load_parts(preset=EnsemblePreset.BRASSARANKA)[:2]
+    busy = NoteEvent(id="busy", pitch=80, start=0, end=1)
+    line = [NoteEvent(id=f"n{i}", pitch=78, start=i * 0.5, end=i * 0.5 + 0.4) for i in range(4)]
+    reason = "no sufficiently supported part for phrase-0001; retained for review"
+    assignments = [
+        Assignment(note=busy, part="eb_clarinet", confidence=0.5, reason="fixture"),
+        Assignment(
+            note=NoteEvent(id="busy2", pitch=70, start=0, end=1),
+            part="bb_clarinet",
+            confidence=0.5,
+            reason="fixture",
+        ),
+    ] + [Assignment(note=n, part=None, confidence=0, reason=reason) for n in line]
+    placed = {a.note.id: a.part for a in place_unassigned(assignments, parts)}
+    assert placed["busy"] == "eb_clarinet" and placed["busy2"] == "bb_clarinet"
+    assert placed["n0"] is None and placed["n1"] is None
+    assert placed["n2"] == placed["n3"] is not None
 
 
 def test_octave_shadow_filters_weak_overtones_only():
