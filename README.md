@@ -332,7 +332,7 @@ docker compose exec app python -c "import torch; print(torch.cuda.get_device_nam
 YourMT3, Hybrid Demucs and the beat tracker then run on CUDA automatically
 (`--device auto`); Basic Pitch stays on CPU. `--device cpu|cuda` on
 `transcribe` and `improve` overrides the choice. `BRASS_BIND=0.0.0.0` publishes
-the page to your local network. The page has no login, so do not forward the
+the page to your local network; `BRASS_PORT=8001` selects another host port. The page has no login, so do not forward the
 port to the internet. The CUDA image is x86_64 only and several GB larger than
 the CPU image; macOS and the default build keep CPU PyTorch.
 
